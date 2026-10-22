@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import csv
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 import unisupermimic.tasks.motion_tracking.g1.supermimic.evaluate as supermimic_evaluate
 from unisupermimic.rl.algos.supermimic import networks
@@ -318,3 +320,61 @@ def test_watch_returns_on_success_without_waiting(monkeypatch, tmp_path) -> None
     assert result["norm_return"] == 0.82
     assert calls == [2000]
     assert not (tmp_path / "ckpt_004000_eval.json").exists()
+
+
+@pytest.mark.parametrize("backend", supermimic_evaluate.SUPPORTED_BACKENDS)
+def test_make_eval_env_composes_backend_owner(monkeypatch, tmp_path, backend: str) -> None:
+    import hydra
+    import unilab.base.config_adapter as config_adapter
+    import unilab.base.process_device as process_device
+    import unilab.training as training
+    import unilab.utils.device as device
+
+    import unisupermimic.scripts.train_supermimic as train
+    import unisupermimic.sim2sim as sim2sim
+
+    cfg = OmegaConf.create(
+        {
+            "training": {"sim_backend": backend, "sim2sim_strict": True},
+            "env": {"commands": {"motion": {"motion_files": ["first.csv", "second.csv"]}}},
+        }
+    )
+    sentinel = object()
+    calls = {}
+
+    def fake_compose(config_name, overrides):
+        assert config_name == "config"
+        calls["overrides"] = overrides
+        return cfg
+
+    def fake_create_env(received_cfg, num_envs, env_cfg_override):
+        assert received_cfg is cfg
+        assert num_envs == 2
+        assert env_cfg_override == {"eval_mode": True}
+        return sentinel
+
+    monkeypatch.setattr(hydra, "compose", fake_compose)
+    monkeypatch.setattr(hydra, "initialize_config_dir", lambda **kwargs: nullcontext())
+    monkeypatch.setattr(config_adapter, "create_env", fake_create_env)
+    monkeypatch.setattr(process_device, "configure_backend_process_device", lambda *args: None)
+    monkeypatch.setattr(training, "ensure_registries", lambda: None)
+    monkeypatch.setattr(device, "get_default_device", lambda: "cpu")
+    monkeypatch.setattr(
+        train, "build_env_override", lambda cfg, eval_mode: {"eval_mode": eval_mode}
+    )
+    monkeypatch.setattr(sim2sim, "resolve_sim2sim_config", lambda *args, **kwargs: cfg)
+
+    assert supermimic_evaluate.make_eval_env(tmp_path, backend=backend) is sentinel
+    assert calls["overrides"] == [
+        "training.play_only=true",
+        f"task=g1_super_mimic/{backend}",
+    ]
+
+
+@pytest.mark.parametrize("backend", supermimic_evaluate.SUPPORTED_BACKENDS)
+def test_eval_parser_accepts_backend(backend: str) -> None:
+    args = supermimic_evaluate._argument_parser().parse_args(
+        ["--ckpt", "run/ckpt.pt", "--backend", backend]
+    )
+
+    assert args.backend == backend

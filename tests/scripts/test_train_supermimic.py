@@ -18,20 +18,23 @@ from unisupermimic.scripts.train_supermimic import (
     main,
     resolve_supermimic_checkpoint,
 )
+from unisupermimic.sim2sim import extract_contract_snapshot
+from unisupermimic.tasks.motion_tracking.g1.supermimic.env import SUPPORTED_BACKENDS
 
 
-def _compose() -> Any:
+def _compose(backend: str = "mjwarp") -> Any:
     root = Path(__file__).resolve().parents[2]
     GlobalHydra.instance().clear()
     with initialize_config_dir(
         config_dir=str(root / "src" / "unisupermimic" / "conf" / "supermimic"),
         version_base="1.3",
     ):
-        return compose("config")
+        return compose("config", overrides=[f"task=g1_super_mimic/{backend}"])
 
 
-def test_owner_materializes_complete_mjwarp_task() -> None:
-    cfg = _compose()
+@pytest.mark.parametrize("backend", SUPPORTED_BACKENDS)
+def test_owner_materializes_complete_task(backend: str) -> None:
+    cfg = _compose(backend)
     override = EnvConfigAdapter(
         cfg, root_dir=Path.cwd(), algo_name="supermimic"
     ).build_task_env_cfg_override()
@@ -41,15 +44,25 @@ def test_owner_materializes_complete_mjwarp_task() -> None:
     apply_cfg_overrides(env_cfg, override)
     env_cfg.validate()
 
+    assert cfg.training.sim_backend == backend
     assert len(env_cfg.commands["motion"].motion_files) == 40
     assert env_cfg.sim_dt == pytest.approx(0.005)
     assert env_cfg.ctrl_dt == pytest.approx(0.02)
     assert env_cfg.scale_rewards_by_dt is False
     assert env_cfg.auto_reset is True
-    assert env_cfg.mjwarp_nconmax == 128
-    assert env_cfg.mjwarp_njmax == 500
+    assert env_cfg.mjwarp_nconmax == (128 if backend == "mjwarp" else None)
+    assert env_cfg.mjwarp_njmax == (500 if backend == "mjwarp" else None)
     assert env_cfg.commands["motion"].goal_frames == 10
     assert env_cfg.rewards["tracking"].weight == pytest.approx(1.0)
+    for event_name in ("startup_context", "reset_context"):
+        randomize_friction = env_cfg.events[event_name].params.get("randomize_friction", True)
+        assert randomize_friction is (backend != "motrix")
+
+
+def test_backend_owners_have_identical_sim2sim_contracts() -> None:
+    snapshots = [extract_contract_snapshot(_compose(backend)) for backend in SUPPORTED_BACKENDS]
+
+    assert snapshots == [snapshots[0]] * len(SUPPORTED_BACKENDS)
 
 
 def test_learner_config_uses_algorithm_dataclass_fields() -> None:

@@ -17,6 +17,7 @@ from unisupermimic.rl.contracts.supermimic import (
     SUPERMIMIC_STATE_KEY,
     SUPERMIMIC_TRANSITION_KEY,
 )
+from unisupermimic.tasks.motion_tracking.g1.supermimic.env import SUPPORTED_BACKENDS
 from unisupermimic.tasks.motion_tracking.g1.supermimic.evaluate import (
     load_policy,
     make_eval_env,
@@ -230,6 +231,9 @@ def render_comparison(
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ckpt", type=Path, required=True)
+    parser.add_argument(
+        "--backend", choices=SUPPORTED_BACKENDS, default="mjwarp", help="Simulation backend"
+    )
     parser.add_argument("--clip", default="dance1_subject1")
     parser.add_argument("--seconds", type=float, default=8.0)
     parser.add_argument("--start", type=float, default=0.0)
@@ -248,7 +252,7 @@ def main(argv: list[str] | None = None) -> None:
     from unisupermimic.sim2sim import policy_load_dim_guard
 
     args = _argument_parser().parse_args(argv)
-    env = make_eval_env(args.ckpt.parent)
+    env = make_eval_env(args.ckpt.parent, backend=args.backend)
     try:
         device = torch.device(env.device)
         checkpoint = torch.load(args.ckpt, map_location=device, weights_only=True)

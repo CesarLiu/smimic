@@ -1,6 +1,6 @@
 <h1 align="center">UniSuperMimic</h1>
 
-<h3 align="center">基于 UniLab 与 MuJoCo-Warp 的 SuperMimic 复现</h3>
+<h3 align="center">基于 UniLab 的 SuperMimic 复现</h3>
 
 <p align="center">语言：简体中文 | <a href="README.md">English</a></p>
 
@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 许可"></a>
 </p>
 
-UniSuperMimic 是 [SuperMimic](https://supermimic.github.io) 在 **UniLab + mjwarp** 上的独立下游复现，面向 Unitree G1 的 LAFAN1 全身运动跟踪。仓库包含可微世界模型、目标条件策略、Manager-Based 任务、40 段运动资产工具，以及训练和确定性全库评估入口。
+UniSuperMimic 是 [SuperMimic](https://supermimic.github.io) 在 **UniLab** 上的独立下游复现，支持 **mjwarp、MuJoCo 和 Motrix** 后端，面向 Unitree G1 的 LAFAN1 全身运动跟踪。仓库包含可微世界模型、目标条件策略、Manager-Based 任务、40 段运动资产工具，以及训练和确定性全库评估入口。
 
 <p align="center">
   <a href="docs/assets/supermimic_comparison.mp4"><img src="docs/assets/supermimic_comparison.gif" alt="SuperMimic 与参考动作对比" width="95%"></a>
@@ -29,7 +29,7 @@ unisupermimic/
 │   │   ├── algos/supermimic/       # 世界模型、策略、critic、replay 和 learner
 │   │   └── contracts/supermimic.py # 环境/算法张量协议
 │   ├── tasks/motion_tracking/g1/supermimic/
-│   │   ├── env.py                  # Manager-Based mjwarp 环境
+│   │   ├── env.py                  # Manager-Based 环境与后端工厂
 │   │   ├── manager_terms.py        # command/action/observation/event/reward terms
 │   │   ├── motion.py, mdp.py       # 运动库与可微 MDP
 │   │   ├── evaluate.py             # 首帧确定性全 clip 评估
@@ -50,7 +50,7 @@ unisupermimic/
 
 ## 安装
 
-环境：Linux、Python 3.10–3.13、CUDA GPU、[uv](https://docs.astral.sh/uv/)。以下命令均在仓库根目录执行，`uv run` 按 `uv.lock` 同步项目、PyPI `unilab`、mjwarp 和开发依赖。
+环境：Linux、Python 3.10–3.13、[uv](https://docs.astral.sh/uv/)；mjwarp 训练需要 CUDA GPU。以下命令均在仓库根目录执行，`uv run` 按 `uv.lock` 同步项目、PyPI `unilab`、三种仿真后端和开发依赖。
 
 ```bash
 uv run unisupermimic-train --help
@@ -72,10 +72,10 @@ uv run tools/prepare_supermimic_assets.py --validate-only
 
 ## 训练
 
-以下命令从仓库根目录运行；把 `CUDA_VISIBLE_DEVICES` 改为实际空闲 GPU。
+以下命令从仓库根目录运行；使用 CUDA 时，把 `CUDA_VISIBLE_DEVICES` 改为实际空闲 GPU。
 
 ```bash
-# 默认：4096 个并行环境，12000 iterations
+# 默认：mjwarp、4096 个并行环境、12000 iterations
 CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-train \
   training.log_dir=runs/supermimic_mjwarp_001
 
@@ -85,9 +85,19 @@ CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-train \
   algo.load_run=runs/supermimic_mjwarp_001 \
   algo.checkpoint=last.pt \
   algo.iterations=16000
+
+# 通过 task owner 选择 MuJoCo
+uv run unisupermimic-train \
+  task=g1_super_mimic/mujoco \
+  training.log_dir=runs/supermimic_mujoco_001
+
+# 通过 task owner 选择 Motrix
+uv run unisupermimic-train \
+  task=g1_super_mimic/motrix \
+  training.log_dir=runs/supermimic_motrix_001
 ```
 
-配置覆盖使用 Hydra 语法，例如快速 smoke 可覆盖 `algo.num_envs`、`algo.iterations`、`algo.wm_hidden`、`algo.policy_hidden` 和 `algo.compile=false`。默认完整配置见 `src/unisupermimic/conf/supermimic/config.yaml`。
+续训或评估 MuJoCo、Motrix run 时，使用与训练相同的 `task=g1_super_mimic/<backend>` 覆盖。Motrix 使用固定摩擦，保留质心和关节偏置域随机化。其他配置覆盖使用 Hydra 语法，例如快速 smoke 可覆盖 `algo.num_envs`、`algo.iterations`、`algo.wm_hidden`、`algo.policy_hidden` 和 `algo.compile=false`。默认完整配置见 `src/unisupermimic/conf/supermimic/config.yaml`。
 
 ## 评估
 
@@ -100,10 +110,11 @@ CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-train \
   algo.checkpoint=12000
 ```
 
-结果写入同目录的 `ckpt_012000_eval.json`。也可直接评估指定 checkpoint：
+结果写入同目录的 `ckpt_012000_eval.json`。也可直接评估指定 checkpoint。独立评估和视频导出入口支持 `--backend mjwarp`、`--backend mujoco`、`--backend motrix`，默认为 mjwarp：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-eval \
+  --backend mjwarp \
   --ckpt runs/supermimic_mjwarp_001/ckpt_012000.pt
 ```
 
@@ -113,6 +124,7 @@ CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-eval \
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=egl uv run unisupermimic-video \
+  --backend mjwarp \
   --ckpt runs/supermimic_mjwarp_001/ckpt_012000.pt \
   --clip jumps1_subject1 \
   --start 6 \
@@ -137,10 +149,10 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=egl uv run unisupermimic-video \
 ```bash
 make check       # ruff、mypy、pyright
 make test        # 非 slow 测试
-make test-all    # 包含需要 CUDA/mjwarp 的 slow 测试
+make test-all    # 包含真实后端 slow 测试；mjwarp 需要 CUDA
 uv run tools/prepare_supermimic_assets.py --validate-only
 ```
 
 ## License
 
-本仓库代码采用 [Apache-2.0](LICENSE)。参考实现的 MIT 许可及原始版权声明完整保存在 [LICENSES/MIT-supermimic.txt](LICENSES/MIT-supermimic.txt)，另见 [NOTICE](NOTICE)。UniLab、UniSim、MuJoCo/mjwarp 和数据集分别遵循其上游许可；本仓库不重新许可这些外部依赖或下载资产。
+本仓库代码采用 [Apache-2.0](LICENSE)。参考实现的 MIT 许可及原始版权声明完整保存在 [LICENSES/MIT-supermimic.txt](LICENSES/MIT-supermimic.txt)，另见 [NOTICE](NOTICE)。UniLab、UniSim、MuJoCo/mjwarp、MotrixSim 和数据集分别遵循其上游许可；本仓库不重新许可这些外部依赖或下载资产。

@@ -1,4 +1,4 @@
-"""SuperMimic Manager-Based environment and mjwarp-only factory."""
+"""SuperMimic Manager-Based environment and backend factory."""
 
 from __future__ import annotations
 
@@ -137,14 +137,18 @@ class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
         return self.reset()
 
 
+SUPPORTED_BACKENDS = ("mjwarp", "mujoco", "motrix")
+
+
 def make_supermimic_env(
     cfg: ManagerBasedRlEnvCfg,
     num_envs: int = 1,
     backend_type: str = "mjwarp",
 ) -> SuperMimicManagerBasedRlEnv:
     """Construct SuperMimic through the common public backend factory path."""
-    if backend_type != "mjwarp":
-        raise ValueError(f"make_supermimic_env supports only 'mjwarp'; got {backend_type!r}")
+    if backend_type not in SUPPORTED_BACKENDS:
+        supported = ", ".join(repr(backend) for backend in SUPPORTED_BACKENDS)
+        raise ValueError(f"make_supermimic_env supports backends {supported}; got {backend_type!r}")
     if not isinstance(cfg, ManagerBasedRlEnvCfg):
         raise TypeError("make_supermimic_env expected ManagerBasedRlEnvCfg")
     assert cfg.scene is not None

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from unisupermimic.tasks.motion_tracking.g1.supermimic import render
@@ -123,3 +124,10 @@ def test_rollout_qpos_trims_continuous_rollout(monkeypatch) -> None:
     assert policy_qpos.shape == (10, 36)
     np.testing.assert_allclose(reference[:, 2], np.arange(5, 15))
     np.testing.assert_allclose(policy_qpos[:, 2], np.arange(5, 15))
+
+
+@pytest.mark.parametrize("backend", render.SUPPORTED_BACKENDS)
+def test_video_parser_accepts_backend(backend: str) -> None:
+    args = render._argument_parser().parse_args(["--ckpt", "run/ckpt.pt", "--backend", backend])
+
+    assert args.backend == backend

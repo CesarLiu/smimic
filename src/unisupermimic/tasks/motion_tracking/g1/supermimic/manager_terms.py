@@ -539,14 +539,20 @@ class SuperMimicContextEvent(ManagerTermBase):
             raise ValueError("SuperMimicContextEvent requires startup or reset mode")
         self._startup = cfg.mode == "startup"
         self._command_name = _event_command_name(cfg)
+        self._randomize_friction = cfg.params.get("randomize_friction", True)
+        if not isinstance(self._randomize_friction, bool):
+            raise TypeError("SuperMimicContextEvent randomize_friction must be bool")
         asset_cfg = cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG)
         if not isinstance(asset_cfg, SceneEntityCfg):
             raise TypeError("SuperMimicContextEvent asset_cfg must be SceneEntityCfg")
         self._robot = cast("Entity", env.scene[asset_cfg.name])
-        self._geom_ids, self._friction_defaults = self._robot.bind_geom_friction_write(
-            asset_cfg.geom_ids,
-            term_name="supermimic_context",
-        )
+        self._geom_ids = None
+        self._friction_defaults = None
+        if self._randomize_friction:
+            self._geom_ids, self._friction_defaults = self._robot.bind_geom_friction_write(
+                asset_cfg.geom_ids,
+                term_name="supermimic_context",
+            )
         torso_ids, _ = self._robot.find_bodies("torso_link", preserve_order=True)
         self._torso_ids, self._ipos_defaults = self._robot.bind_body_ipos_write(
             torso_ids,
@@ -557,7 +563,11 @@ class SuperMimicContextEvent(ManagerTermBase):
             raise TypeError(
                 "SuperMimicContextEvent ground_asset_cfg must be SceneEntityCfg or None"
             )
-        self._ground = None if ground_cfg is None else cast("Entity", env.scene[ground_cfg.name])
+        self._ground = (
+            None
+            if ground_cfg is None or not self._randomize_friction
+            else cast("Entity", env.scene[ground_cfg.name])
+        )
         self._ground_geom_ids = None
         self._ground_friction_defaults = None
         if self._ground is not None and ground_cfg is not None:
@@ -575,8 +585,9 @@ class SuperMimicContextEvent(ManagerTermBase):
         command_name: str = "motion",
         asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
         ground_asset_cfg: SceneEntityCfg | None = None,
+        randomize_friction: bool = True,
     ) -> None:
-        del command_name, asset_cfg, ground_asset_cfg
+        del command_name, asset_cfg, ground_asset_cfg, randomize_friction
         ids = resolve_reset_env_ids(
             env_ids,
             num_envs=env.num_envs,
@@ -588,24 +599,28 @@ class SuperMimicContextEvent(ManagerTermBase):
             expected = torch.arange(env.num_envs, dtype=torch.int64, device=env.device)
             if not torch.equal(ids, expected):
                 raise ValueError("SuperMimic startup context requires every environment row")
-            if command.eval_mode:
+            if command.eval_mode or not self._randomize_friction:
                 command.xi[:, 0] = 1.0
-                command.xi[:, 30:33] = 0.0
             else:
                 command.xi[:, 0] = env.rng.uniform(0.3, 1.2, (env.num_envs,))
+            if command.eval_mode:
+                command.xi[:, 30:33] = 0.0
+            else:
                 command.xi[:, 30:33] = env.rng.uniform(
                     torch.tensor([-0.025, -0.05, -0.05], device=env.device),
                     torch.tensor([0.025, 0.05, 0.05], device=env.device),
                     (env.num_envs, 3),
                 )
-        friction = _selected_defaults(self._friction_defaults, ids)
-        friction[..., 0] = command.xi[ids, :1]
-        self._robot.write_geom_friction_to_sim(
-            friction,
-            geom_ids=self._geom_ids,
-            env_ids=ids,
-            term_name="supermimic_context",
-        )
+        if self._randomize_friction:
+            assert self._geom_ids is not None and self._friction_defaults is not None
+            friction = _selected_defaults(self._friction_defaults, ids)
+            friction[..., 0] = command.xi[ids, :1]
+            self._robot.write_geom_friction_to_sim(
+                friction,
+                geom_ids=self._geom_ids,
+                env_ids=ids,
+                term_name="supermimic_context",
+            )
         ipos = _selected_defaults(self._ipos_defaults, ids)
         ipos += command.xi[ids, 30:33].unsqueeze(1)
         if self._startup:

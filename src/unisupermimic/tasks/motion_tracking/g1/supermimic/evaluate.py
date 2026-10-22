@@ -19,6 +19,7 @@ from unisupermimic.rl.contracts.supermimic import (
     SUPERMIMIC_STATE_KEY,
     SUPERMIMIC_TRANSITION_KEY,
 )
+from unisupermimic.tasks.motion_tracking.g1.supermimic.env import SUPPORTED_BACKENDS
 from unisupermimic.tasks.motion_tracking.g1.supermimic.mdp import MAX_STEP_REWARD, MDP
 
 if TYPE_CHECKING:
@@ -253,7 +254,7 @@ def watch(
         time.sleep(poll_seconds)
 
 
-def make_eval_env(run_dir: Path) -> SuperMimicManagerBasedRlEnv:
+def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBasedRlEnv:
     from hydra import compose, initialize_config_dir
     from unilab.base.config_adapter import create_env
     from unilab.base.process_device import configure_backend_process_device
@@ -265,8 +266,9 @@ def make_eval_env(run_dir: Path) -> SuperMimicManagerBasedRlEnv:
     from unisupermimic.sim2sim import resolve_sim2sim_config
 
     config_dir = Path(unisupermimic.__file__).resolve().parent / "conf" / "supermimic"
+    overrides = ["training.play_only=true", f"task=g1_super_mimic/{backend}"]
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir)):
-        cfg = compose(config_name="config", overrides=["training.play_only=true"])
+        cfg = compose(config_name="config", overrides=overrides)
     ensure_registries()
     resolve_sim2sim_config(
         run_dir,
@@ -289,6 +291,9 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run_dir", type=Path)
     parser.add_argument("--ckpt", type=Path)
+    parser.add_argument(
+        "--backend", choices=SUPPORTED_BACKENDS, default="mjwarp", help="Simulation backend"
+    )
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--every", type=int, default=1)
     parser.add_argument("--poll_seconds", type=float, default=60.0)
@@ -303,7 +308,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.ckpt is None and args.run_dir is None:
         _argument_parser().error("one of --run_dir or --ckpt is required")
     run_dir = args.ckpt.parent if args.ckpt is not None else args.run_dir
-    env = make_eval_env(run_dir)
+    env = make_eval_env(run_dir, backend=args.backend)
     try:
         if args.ckpt is not None:
             device = torch.device(env.device)

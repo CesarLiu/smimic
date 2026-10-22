@@ -11,14 +11,14 @@ source-exclude = [
 [project]
 name = "unisupermimic"
 version = "0.1.0"
-description = "SuperMimic reproduction on UniLab with the mjwarp backend"
+description = "SuperMimic reproduction on UniLab with mjwarp, MuJoCo, and Motrix backends"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSES/*"]
 authors = [{ name = "UniSuperMimic Authors" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "unilab[mjwarp]>=1.5.0",
+    "unilab[mjwarp,mujoco,motrix]>=1.5.0",
     "imageio[ffmpeg]>=2.37",
     "mujoco~=3.11.0",
     "pillow>=10",
@@ -54,7 +54,7 @@ no_site_packages = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["slow: long-running training or production mjwarp tests"]
+markers = ["slow: long-running training or production backend tests"]
 addopts = "--tb=short -m 'not slow'"
 
 [tool.pyright]

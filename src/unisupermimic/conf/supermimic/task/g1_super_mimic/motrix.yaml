@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - /task/g1_super_mimic/base
+  - _self_
+
+training:
+  task_name: G1SuperMimic
+  sim_backend: motrix
+
+env:
+  events:
+    startup_context:
+      params:
+        randomize_friction: false
+    reset_context:
+      params:
+        randomize_friction: false
