@@ -1,0 +1,66 @@
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-exclude = [
+    "/src/unisupermimic/assets/robots/g1/assets",
+    "/src/unisupermimic/assets/motions",
+]
+
+[project]
+name = "unisupermimic"
+version = "0.1.0"
+description = "SuperMimic reproduction on UniLab with the mjwarp backend"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSES/*"]
+authors = [{ name = "UniSuperMimic Authors" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "unilab[mjwarp]>=1.5.0",
+    "imageio[ffmpeg]>=2.37",
+    "mujoco~=3.11.0",
+    "pillow>=10",
+]
+
+[project.scripts]
+unisupermimic-train = "unisupermimic.scripts.train_supermimic:hydra_main"
+unisupermimic-eval = "unisupermimic.tasks.motion_tracking.g1.supermimic.evaluate:main"
+unisupermimic-video = "unisupermimic.tasks.motion_tracking.g1.supermimic.render:main"
+
+[project.entry-points."unilab.tasks"]
+unisupermimic = "unisupermimic.tasks"
+
+[dependency-groups]
+dev = ["pytest", "ruff", "mypy", "pyright>=1.1.408"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501", "N806", "E402", "F401", "N801", "F821", "E741", "N802", "N803", "N812"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+no_site_packages = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["slow: long-running training or production mjwarp tests"]
+addopts = "--tb=short -m 'not slow'"
+
+[tool.pyright]
+pythonVersion = "3.10"
+venvPath = "."
+venv = ".venv"
+include = ["src/unisupermimic"]
+reportMissingImports = "warning"
+reportMissingModuleSource = "none"
