@@ -371,11 +371,8 @@ def main(argv: list[str] | None = None) -> None:
                     push_every=args.push_every,
                     push_seed=args.push_seed,
                 )
-            if args.push_speed > 0:
-                _atomic_write_json(
-                    args.ckpt.with_name(f"{args.ckpt.stem}_eval_push{args.push_speed:g}.json"),
-                    result,
-                )
+            suffix = f"_eval_push{args.push_speed:g}" if args.push_speed > 0 else "_eval"
+            _atomic_write_json(args.ckpt.with_name(f"{args.ckpt.stem}{suffix}.json"), result)
             print(
                 json.dumps(
                     {key: value for key, value in result.items() if key != "per_clip"}, indent=1

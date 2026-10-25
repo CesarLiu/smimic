@@ -22,7 +22,7 @@ from unisupermimic.rl.contracts.supermimic import (
 )
 from unisupermimic.rl.logging import SuperMimicLogger
 
-from . import networks
+from . import distributed, networks
 from .geometry import add_push, sample_push, unflatten_state
 from .networks import Critic, Policy, WorldModel, mlp
 from .replay import ReplayBuffer
@@ -64,6 +64,8 @@ class SuperMimicConfig:
     # imagined root-velocity kicks (analytic push injection; 0 = off, the paper)
     imag_push_rate: float = 0.0
     imag_push_scale: float = 1.0
+    # multi-GPU (torchrun): scale lr by sqrt(world size), as the paper does for 2 GPUs
+    ddp_lr_scale: bool = True
 
 
 _LOG_FIELDS = (
@@ -132,7 +134,7 @@ class SuperMimicLearner:
         # rocBLAS kernel selection costing ~100 ms per call.
         torch.backends.cuda.matmul.allow_tf32 = cfg.amp == "none"
         torch.backends.cudnn.allow_tf32 = True
-        torch.manual_seed(cfg.seed)
+        torch.manual_seed(cfg.seed + 1000 * distributed.rank())  # distinct data on every rank
         networks.AMP_DTYPE = torch.bfloat16 if cfg.amp == "bf16" else None
 
         self.wm = self._make_world_model().to(self.device)
@@ -142,9 +144,13 @@ class SuperMimicLearner:
             self.critic.net = mlp(self.critic.norm.mean.numel(), cfg.test_hidden_dims, 1).to(
                 self.device
             )
-        self.opt_wm = torch.optim.Adam(self.wm.parameters(), lr=cfg.lr)
-        self.opt_pi = torch.optim.Adam(self.pi.parameters(), lr=cfg.lr, betas=(0.9, 0.95))
-        self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=cfg.lr)
+        for module in (self.wm, self.pi, self.critic):
+            distributed.broadcast_module(module)
+        self.world_size = distributed.world_size()
+        self.base_lr = cfg.lr * (math.sqrt(self.world_size) if cfg.ddp_lr_scale else 1.0)
+        self.opt_wm = torch.optim.Adam(self.wm.parameters(), lr=self.base_lr)
+        self.opt_pi = torch.optim.Adam(self.pi.parameters(), lr=self.base_lr, betas=(0.9, 0.95))
+        self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.base_lr)
 
         self.buffer = ReplayBuffer(
             cfg.buffer_steps,
@@ -175,8 +181,9 @@ class SuperMimicLearner:
         self._reward_term_fn = self._compile(self._reward_term)
         self._critic_input_fn = self._compile(self._critic_input)
 
-        with (self.log_dir / "args.json").open("w", encoding="utf-8") as stream:
-            json.dump(asdict(cfg), stream, indent=2)
+        if distributed.is_main():
+            with (self.log_dir / "args.json").open("w", encoding="utf-8") as stream:
+                json.dump(dict(asdict(cfg), world_size=self.world_size), stream, indent=2)
 
     def _compile(self, function):
         if not self.cfg.compile:
@@ -372,6 +379,7 @@ class SuperMimicLearner:
         loss, last_error = self._wm_err_fn(predicted, window["s1"], window["mask"])
         self.opt_wm.zero_grad(set_to_none=True)
         loss.backward()
+        distributed.allreduce_grads(self.wm.parameters())
         nn.utils.clip_grad_norm_(self.wm.parameters(), 1.0)
         self.opt_wm.step()
         mask = window["mask"][:, -1]
@@ -466,6 +474,7 @@ class SuperMimicLearner:
             loss = -objective.mean()
             self.opt_pi.zero_grad(set_to_none=True)
             loss.backward()
+            distributed.allreduce_grads(self.pi.parameters())
             grad_norm = nn.utils.clip_grad_norm_(self.pi.parameters(), 1.0)
             nn.utils.clip_grad_value_(self.pi.parameters(), 0.1)
             if torch.isfinite(grad_norm):
@@ -530,6 +539,7 @@ class SuperMimicLearner:
                     ).mean()
                     self.opt_v.zero_grad(set_to_none=True)
                     value_loss.backward()
+                    distributed.allreduce_grads(self.critic.parameters())
                     nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
                     self.opt_v.step()
 
@@ -544,8 +554,8 @@ class SuperMimicLearner:
 
     def lr_at(self, iteration: int) -> float:
         if iteration >= self.cfg.lr_decay_iters:
-            return self.cfg.lr * 0.03
-        return self.cfg.lr * (
+            return self.base_lr * 0.03
+        return self.base_lr * (
             0.03 + 0.97 * 0.5 * (1 + math.cos(math.pi * iteration / self.cfg.lr_decay_iters))
         )
 
@@ -556,6 +566,7 @@ class SuperMimicLearner:
             "iteration": self.iteration,
             "wall_time": self.wall_time,
             "sim_steps": self.sim_steps,
+            "world_size": self.world_size,
             "args": asdict(self.cfg),
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -572,6 +583,8 @@ class SuperMimicLearner:
 
     def save(self, path: str | Path | None = None, include_optimizers: bool = True) -> Path:
         destination = Path(path) if path is not None else self.log_dir / "last.pt"
+        if not distributed.is_main():  # every rank holds the same networks
+            return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(destination.name + ".tmp")
         torch.save(self._checkpoint(include_optimizers), temporary)
@@ -613,7 +626,7 @@ class SuperMimicLearner:
             start_iteration=start_iteration,
             num_envs=self.env.num_envs,
             log_dir=str(self.log_dir),
-            log_backend=self.cfg.log_backend,
+            log_backend=self.cfg.log_backend if distributed.is_main() else "no_print",
         )
         logger.start(status="Warming up...")
         try:
@@ -628,6 +641,8 @@ class SuperMimicLearner:
             logger.start_training_timer()
 
             log_path = self.log_dir / "train_log.csv"
+            if not distributed.is_main():  # only rank 0 writes the CSV (rows are rank-averaged)
+                log_path = Path(os.devnull)
             with log_path.open("a", encoding="utf-8", newline="") as log_file:
                 if start_iteration == 0:
                     log_file.write(",".join(_LOG_FIELDS) + "\n")
@@ -724,7 +739,7 @@ class SuperMimicLearner:
                         row = [
                             self.iteration,
                             self.wall_time / 3600,
-                            self.sim_steps,
+                            self.sim_steps * self.world_size,
                             self._mean(aggregate["wm"]),
                             self._mean(aggregate["wm8"]),
                             self._mean(aggregate["pi"]),
@@ -739,6 +754,9 @@ class SuperMimicLearner:
                             iterations_per_second,
                             learning_rate,
                         ]
+                        if self.world_size > 1:  # metrics averaged over ranks
+                            values = torch.tensor(row[3:14], dtype=torch.float64, device=self.device)
+                            row[3:14] = distributed.allreduce_mean_(values).tolist()
                         log_file.write(
                             ",".join(
                                 f"{value:.6g}" if isinstance(value, float) else str(value)

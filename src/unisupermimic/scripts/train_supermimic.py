@@ -25,6 +25,7 @@ from unilab.training.tensor_runtime import (
 from unilab.utils.checkpoint import get_latest_run, normalize_checkpoint_value
 from unilab.utils.device import get_default_device
 
+from unisupermimic.rl.algos.supermimic import distributed
 from unisupermimic.rl.algos.supermimic.learner import SuperMimicConfig, SuperMimicLearner
 from unisupermimic.sim2sim import (
     extract_contract_snapshot,
@@ -115,6 +116,14 @@ def _close_env(env: Any) -> None:
 
 
 def main(cfg: DictConfig) -> None:
+    distributed.init_from_env()  # no-op without torchrun (see scripts/train_ddp.py)
+    if distributed.world_size() > 1:
+        if bool(cfg.training.play_only):
+            raise ValueError("evaluate with a single process; torchrun is for training only")
+        # distinct environment randomness per rank (the learner offsets its own seed too)
+        base_seed = int(cfg.algo.seed) if cfg.algo.seed is not None else 0
+        OmegaConf.update(cfg, "algo.seed", base_seed)
+        OmegaConf.update(cfg, "env.seed", base_seed + 1000 * distributed.rank(), force_add=True)
     ensure_registries()
     if float(cfg.algo.gamma) != float(cfg.env.commands.motion.gamma):
         raise ValueError("SuperMimic requires algo.gamma == env.commands.motion.gamma")
@@ -138,7 +147,9 @@ def main(cfg: DictConfig) -> None:
     elif checkpoint is not None:
         log_dir = checkpoint.parent
     else:
-        log_dir = Path(resolve_run_log_dir(cfg))
+        chosen = str(resolve_run_log_dir(cfg)) if distributed.is_main() else None
+        log_dir = Path(distributed.broadcast_object(chosen))  # rank 0 picks the run directory
+    if not play_only and checkpoint is None and distributed.is_main():
         write_run_config_snapshot(
             log_dir,
             run_metadata={

@@ -9,6 +9,7 @@ import torch.nn as nn
 
 from unisupermimic.rl.contracts.supermimic import State
 
+from . import distributed
 from .geometry import invariant_features, so3_exp, so3_log, yaw_mat
 
 
@@ -50,9 +51,12 @@ class RunningNorm(nn.Module):
         x = x.reshape(-1, x.shape[-1]).float()
         if self.count >= self.max_count:
             return
-        batch_count = x.shape[0]
-        batch_mean = x.mean(0)
-        batch_var = x.var(0, unbiased=False)
+        if distributed.world_size() > 1:  # identical statistics on every rank
+            batch_count, batch_mean, batch_var = distributed.global_moments(x)
+        else:
+            batch_count = x.shape[0]
+            batch_mean = x.mean(0)
+            batch_var = x.var(0, unbiased=False)
         total = self.count + batch_count
         delta = batch_mean - self.mean
         self.mean += delta * batch_count / total
