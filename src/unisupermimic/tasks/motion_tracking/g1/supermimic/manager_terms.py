@@ -186,6 +186,9 @@ class SuperMimicCommandCfg(CommandTermCfg):
     # The env applies it after recording the transition, so s1 stays the clean physics target.
     push_scale: float = 0.0
     push_interval_s: tuple[float, float] = (1.0, 3.0)
+    # packed 50 Hz motion library (tools/prepare_bones_seed.py), used instead of motion_files
+    # for large datasets such as BONES-SEED (129,514 clips)
+    motion_pack: str | None = None
 
     def build(self, env: ManagerBasedRlEnv) -> SuperMimicCommand:
         return SuperMimicCommand(self, env)
@@ -204,7 +207,9 @@ class SuperMimicCommand(CommandTerm):
             raise ValueError("SuperMimic requires the G1 natural joint order")
         device = self._device
         self.kin = G1Kinematics(cfg.mjcf_path, device)
-        self.motion = MotionLib(cfg.motion_files, self.kin, device, src_fps=cfg.src_fps)
+        self.motion = MotionLib(
+            cfg.motion_files, self.kin, device, src_fps=cfg.src_fps, pack=cfg.motion_pack
+        )
         self.default_q = self.robot.data.default_joint_pos(device).clone()
         if self.default_q.shape != (self.num_envs, NUM_J):
             raise ValueError(
@@ -236,7 +241,10 @@ class SuperMimicCommand(CommandTerm):
     def _validate_cfg(cfg: SuperMimicCommandCfg) -> None:
         if not isinstance(cfg.entity_name, str) or not cfg.entity_name:
             raise ValueError("SuperMimicCommandCfg entity_name must be non-empty")
-        if (
+        if cfg.motion_pack is not None:
+            if not isinstance(cfg.motion_pack, str) or not cfg.motion_pack:
+                raise ValueError("SuperMimicCommandCfg motion_pack must be a non-empty path")
+        elif (
             not isinstance(cfg.motion_files, list)
             or not cfg.motion_files
             or any(not isinstance(path, str) or not path for path in cfg.motion_files)

@@ -104,6 +104,11 @@ def resolve_supermimic_checkpoint(cfg: DictConfig) -> Path:
 
 
 def _motion_count(cfg: DictConfig) -> int:
+    pack = OmegaConf.select(cfg, "env.commands.motion.motion_pack")
+    if pack:
+        from unisupermimic.tasks.motion_tracking.g1.supermimic.motion import motion_pack_clip_count
+
+        return motion_pack_clip_count(pack)
     files = OmegaConf.select(cfg, "env.commands.motion.motion_files")
     if files is None or len(files) == 0:
         raise ValueError("SuperMimic evaluation requires a nonempty motion library")
@@ -170,7 +175,11 @@ def main(cfg: DictConfig) -> None:
     try:
         env = create_env(
             cfg,
-            num_envs=_motion_count(cfg) if play_only else int(cfg.algo.num_envs),
+            num_envs=(
+                min(_motion_count(cfg), int(OmegaConf.select(cfg, "eval.max_envs", default=8192)))
+                if play_only
+                else int(cfg.algo.num_envs)
+            ),
             env_cfg_override=env_override,
         )
         if play_only:

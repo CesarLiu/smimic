@@ -29,6 +29,7 @@ SUPERMIMIC_DENYLIST = [
     "env.commands.motion.context_dim",
     "env.commands.motion.motion_files",
     "env.commands.motion.mjcf_path",
+    "env.commands.motion.motion_pack",
 ]
 DENYLIST = list(dict.fromkeys([*UPSTREAM_DENYLIST, *SUPERMIMIC_DENYLIST]))
 SNAPSHOT_FIELDS = [*DENYLIST, *WARNING_LIST]

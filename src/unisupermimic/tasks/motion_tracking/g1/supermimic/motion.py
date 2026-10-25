@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import copy
 import csv
+import json
 import math
 import os
 from collections.abc import Sequence
+from pathlib import Path
 
+import numpy as np
 import torch
 
 from unisupermimic.rl.algos.supermimic.geometry import (
@@ -25,6 +28,45 @@ CONTROL_DT = 0.02
 BIN_FRAMES = 50
 
 
+PACK_ARRAYS = ("root_pos", "root_quat", "joints")
+
+
+def resample_clip(
+    raw: torch.Tensor, src_fps: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """CSV rows (pos, quat xyzw, 29 joints) at ``src_fps`` -> 50 Hz position, wxyz quaternion,
+    joints. Packed libraries store exactly this output (see load_motion_pack)."""
+    position, quat_xyzw, joints = raw[:, :3], raw[:, 3:7], raw[:, 7:36]
+    quaternion = torch.cat((quat_xyzw[:, 3:4], quat_xyzw[:, :3]), -1)
+    source_frames = raw.shape[0]
+    duration = (source_frames - 1) / src_fps
+    num_frames = math.floor(duration / CONTROL_DT) + 1
+    sample = torch.arange(num_frames, dtype=torch.float32) * CONTROL_DT * src_fps
+    lower = torch.clamp(sample.floor().long(), max=source_frames - 2)
+    alpha = (sample - lower.float()).clamp(0, 1)
+    position = position[lower] * (1 - alpha[:, None]) + position[lower + 1] * alpha[:, None]
+    joints = joints[lower] * (1 - alpha[:, None]) + joints[lower + 1] * alpha[:, None]
+    quaternion = quat_slerp(quaternion[lower], quaternion[lower + 1], alpha)
+    return position, quaternion, joints
+
+
+def load_motion_pack(path: str | Path) -> tuple[list[str], np.ndarray, dict[str, np.ndarray]]:
+    """A packed motion library (tools/prepare_bones_seed.py): 50 Hz root position, wxyz root
+    quaternion and joints, concatenated over clips, memory-mapped from .npy files."""
+    path = Path(path)
+    meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
+    if not math.isclose(float(meta["fps"]), 1.0 / CONTROL_DT):
+        raise ValueError(f"motion pack {path} must be stored at {1.0 / CONTROL_DT:g} Hz")
+    names = (path / "names.txt").read_text(encoding="utf-8").split("\n")[: int(meta["n_clips"])]
+    lengths = np.load(path / "clip_len.npy")
+    arrays = {key: np.load(path / f"{key}.npy", mmap_mode="r") for key in PACK_ARRAYS}
+    return names, lengths, arrays
+
+
+def motion_pack_clip_count(path: str | Path) -> int:
+    return int(json.loads((Path(path) / "meta.json").read_text(encoding="utf-8"))["n_clips"])
+
+
 class MotionLib:
     def __init__(
         self,
@@ -32,32 +74,34 @@ class MotionLib:
         kin: G1Kinematics,
         device: str | torch.device,
         src_fps: float = 30.0,
+        pack: str | None = None,
     ):
-        if not files:
-            raise ValueError("MotionLib requires at least one CSV file")
+        if not files and pack is None:
+            raise ValueError("MotionLib requires at least one CSV file or a motion pack")
         self.device = torch.device(device)
-        self.names = [os.path.splitext(os.path.basename(file))[0] for file in files]
         positions, quaternions, joint_positions = [], [], []
         lengths = []
-        for file in files:
+        if pack is not None:  # already resampled to 50 Hz by resample_clip
+            self.names, clip_lengths, arrays = load_motion_pack(pack)
+            offset = 0
+            for length in clip_lengths.tolist():
+                window = slice(offset, offset + length)
+                positions.append(torch.from_numpy(np.array(arrays["root_pos"][window])))
+                quaternions.append(torch.from_numpy(np.array(arrays["root_quat"][window])))
+                joint_positions.append(torch.from_numpy(np.array(arrays["joints"][window])))
+                lengths.append(length)
+                offset += length
+        else:
+            self.names = [os.path.splitext(os.path.basename(file))[0] for file in files]
+        for file in files if pack is None else ():
             raw = _load_csv(file)
             if raw.shape[0] < 2 or raw.shape[1] != 36:
                 raise ValueError(f"{file} must have at least two rows and 36 columns")
-            position, quat_xyzw, joints = raw[:, :3], raw[:, 3:7], raw[:, 7:36]
-            quaternion = torch.cat((quat_xyzw[:, 3:4], quat_xyzw[:, :3]), -1)
-            source_frames = raw.shape[0]
-            duration = (source_frames - 1) / src_fps
-            num_frames = math.floor(duration / CONTROL_DT) + 1
-            sample = torch.arange(num_frames, dtype=torch.float32) * CONTROL_DT * src_fps
-            lower = torch.clamp(sample.floor().long(), max=source_frames - 2)
-            alpha = (sample - lower.float()).clamp(0, 1)
-            position = position[lower] * (1 - alpha[:, None]) + position[lower + 1] * alpha[:, None]
-            joints = joints[lower] * (1 - alpha[:, None]) + joints[lower + 1] * alpha[:, None]
-            quaternion = quat_slerp(quaternion[lower], quaternion[lower + 1], alpha)
+            position, quaternion, joints = resample_clip(raw, src_fps)
             positions.append(position)
             quaternions.append(quaternion)
             joint_positions.append(joints)
-            lengths.append(num_frames)
+            lengths.append(position.shape[0])
 
         self.clip_len = torch.tensor(lengths, dtype=torch.long, device=self.device)
         self.clip_start = torch.cumsum(

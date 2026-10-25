@@ -86,24 +86,67 @@ def evaluate(
     policy = load_policy(env, checkpoint, device)
 
     num_clips = len(motion.names)
-    if env.num_envs != num_clips:
-        raise ValueError(
-            f"SuperMimic evaluation requires one environment per clip: "
-            f"got {env.num_envs} environments for {num_clips} clips"
-        )
-    _, reset_info = env.reset_to_frames(motion.clip_start.clone())
-    current = reset_info[SUPERMIMIC_STATE_KEY]
     returns = torch.zeros(num_clips, device=env.device)
     steps = torch.zeros(num_clips, dtype=torch.int64, device=env.device)
-    finished = torch.zeros(num_clips, dtype=torch.bool, device=env.device)
-    failed = torch.zeros_like(finished)
-    history = None
+    failed = torch.zeros(num_clips, dtype=torch.bool, device=env.device)
     generator = torch.Generator(device=env.device).manual_seed(push_seed) if push_speed > 0 else None
+    # clips are played in chunks of env.num_envs (one environment per clip within a chunk);
+    # the push generator carries over between chunks, so kicks stay identical across policies
+    for first in range(0, num_clips, env.num_envs):
+        clip_ids = torch.arange(first, min(first + env.num_envs, num_clips), device=env.device)
+        chunk = _evaluate_chunk(
+            env, policy, mdp, clip_ids, goal_frames, hist, push_speed, push_every, generator
+        )
+        returns[clip_ids], steps[clip_ids], failed[clip_ids] = chunk
+
+    max_returns = (motion.clip_len - 1).float() * MAX_STEP_REWARD
+    normalized = returns / max_returns
+    failed_indices = failed.nonzero(as_tuple=False).flatten().tolist()
+    return {
+        "norm_return": normalized.mean().item(),
+        "norm_return_framew": (returns.sum() / max_returns.sum()).item(),
+        "n_failed": len(failed_indices),
+        "failed": [motion.names[index] for index in failed_indices],
+        "push_speed": push_speed,
+        "per_clip": {
+            name: {
+                "norm_return": normalized[index].item(),
+                "steps": steps[index].item(),
+                "failed": failed[index].item(),
+            }
+            for index, name in enumerate(motion.names)
+        },
+    }
+
+
+def _evaluate_chunk(
+    env: SuperMimicManagerBasedRlEnv,
+    policy: networks.Policy,
+    mdp: MDP,
+    clip_ids: torch.Tensor,
+    goal_frames: int,
+    hist: int,
+    push_speed: float,
+    push_every: int,
+    generator: torch.Generator | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Play ``clip_ids`` (at most env.num_envs) once from their first frames; spare
+    environments replay the last clip and are ignored."""
+    motion = mdp.motion
+    n, k = env.num_envs, clip_ids.numel()
+    padded = torch.cat((clip_ids, clip_ids[-1:].expand(n - k)))
+    _, reset_info = env.reset_to_frames(motion.clip_start[padded].clone())
+    current = reset_info[SUPERMIMIC_STATE_KEY]
+    returns = torch.zeros(n, device=env.device)
+    steps = torch.zeros(n, dtype=torch.int64, device=env.device)
+    finished = torch.arange(n, device=env.device) >= k  # spare envs count as finished
+    failed = torch.zeros(n, dtype=torch.bool, device=env.device)
+    history = None
     t = 0
     while not bool(finished.all()):
         if push_speed > 0 and t > 0 and t % push_every == 0:
-            angle = 2 * math.pi * torch.rand(num_clips, device=env.device, generator=generator)
-            push = torch.zeros((num_clips, 6), device=env.device)
+            angle = 2 * math.pi * torch.rand(n, device=env.device, generator=generator)
+            push = torch.zeros((n, 6), device=env.device)
             push[:, 0], push[:, 1] = push_speed * torch.cos(angle), push_speed * torch.sin(angle)
             current = env.apply_root_push(push, ~finished)
         t += 1
@@ -128,25 +171,7 @@ def evaluate(
         failed |= alive & transition["term"]
         finished |= alive & transition["done"]
         current = state.info[SUPERMIMIC_STATE_KEY]
-
-    max_returns = (motion.clip_len - 1).float() * MAX_STEP_REWARD
-    normalized = returns / max_returns
-    failed_indices = failed.nonzero(as_tuple=False).flatten().tolist()
-    return {
-        "norm_return": normalized.mean().item(),
-        "norm_return_framew": (returns.sum() / max_returns.sum()).item(),
-        "n_failed": len(failed_indices),
-        "failed": [motion.names[index] for index in failed_indices],
-        "push_speed": push_speed,
-        "per_clip": {
-            name: {
-                "norm_return": normalized[index].item(),
-                "steps": steps[index].item(),
-                "failed": failed[index].item(),
-            }
-            for index, name in enumerate(motion.names)
-        },
-    }
+    return returns[:k], steps[:k], failed[:k]
 
 
 def _checkpoint_iteration(path: Path) -> int:
@@ -289,7 +314,9 @@ def _structural_overrides(run_dir: Path) -> list[str]:
     return overrides
 
 
-def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBasedRlEnv:
+def make_eval_env(
+    run_dir: Path, backend: str = "mjwarp", max_envs: int | None = None
+) -> SuperMimicManagerBasedRlEnv:
     from hydra import compose, initialize_config_dir
     from unilab.base.config_adapter import create_env
     from unilab.base.process_device import configure_backend_process_device
@@ -297,7 +324,7 @@ def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBa
     from unilab.utils.device import get_default_device
 
     import unisupermimic
-    from unisupermimic.scripts.train_supermimic import build_env_override
+    from unisupermimic.scripts.train_supermimic import _motion_count, build_env_override
     from unisupermimic.sim2sim import resolve_sim2sim_config
 
     config_dir = Path(unisupermimic.__file__).resolve().parent / "conf" / "supermimic"
@@ -305,6 +332,7 @@ def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBa
         "training.play_only=true",
         f"task=g1_super_mimic/{backend}",
         *_structural_overrides(run_dir),
+        *([f"eval.max_envs={max_envs}"] if max_envs else []),
     ]
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir)):
         cfg = compose(config_name="config", overrides=overrides)
@@ -323,7 +351,7 @@ def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBa
         "SuperMimicManagerBasedRlEnv",
         create_env(
             cfg,
-            num_envs=len(cfg.env.commands.motion.motion_files),
+            num_envs=min(_motion_count(cfg), int(cfg.eval.max_envs)),
             env_cfg_override=build_env_override(cfg, eval_mode=True, learner_device=device),
         ),
     )
@@ -343,6 +371,8 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--push_speed", type=float, default=0.0, help="m/s; 0 = no pushes")
     parser.add_argument("--push_every", type=int, default=150, help="steps between pushes")
     parser.add_argument("--push_seed", type=int, default=0)
+    parser.add_argument("--max_envs", type=int, default=None,
+                        help="evaluate in chunks of this many clips (default: eval.max_envs)")
     return parser
 
 
@@ -353,7 +383,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.ckpt is None and args.run_dir is None:
         _argument_parser().error("one of --run_dir or --ckpt is required")
     run_dir = args.ckpt.parent if args.ckpt is not None else args.run_dir
-    env = make_eval_env(run_dir, backend=args.backend)
+    env = make_eval_env(run_dir, backend=args.backend, max_envs=args.max_envs)
     try:
         if args.ckpt is not None:
             device = torch.device(env.device)

@@ -97,6 +97,8 @@ env:
       # range, applied after each transition is recorded (0 = off, as in the paper)
       push_scale: 0.0
       push_interval_s: [1.0, 3.0]
+      # packed 50 Hz motion library (tools/prepare_bones_seed.py); replaces motion_files when set
+      motion_pack: null
       motion_files:
         - src/unisupermimic/assets/motions/g1/lafan1_supermimic/dance1_subject1.csv
         - src/unisupermimic/assets/motions/g1/lafan1_supermimic/dance1_subject2.csv

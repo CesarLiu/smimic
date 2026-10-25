@@ -337,6 +337,7 @@ def test_make_eval_env_composes_backend_owner(monkeypatch, tmp_path, backend: st
         {
             "training": {"sim_backend": backend, "sim2sim_strict": True},
             "env": {"commands": {"motion": {"motion_files": ["first.csv", "second.csv"]}}},
+            "eval": {"max_envs": 8192},
         }
     )
     sentinel = object()
