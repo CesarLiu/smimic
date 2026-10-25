@@ -43,6 +43,28 @@ algo:
   # imagined root-velocity kicks (analytic push injection); 0 = off, as in the paper
   imag_push_rate: 0.0
   imag_push_scale: 1.0
+  # training techniques from go2-supermimic (all off by default = the paper; see
+  # SuperMimicConfig in rl/algos/supermimic/learner.py and docs/H200_RUNBOOK.md)
+  wm_prioritized_frac: 0.0      # rare-event world-model batches: rarest of 4x candidates
+  wm_archive_frac: 0.0          #   and an archive of rare windows (flight, landings, falls)
+  archive_size: 50000
+  archive_keep_prob: 0.02
+  contact_height: 0.10          # ankle-link height; 0.065 counts toe stands as flight
+  hard_vz: 0.6
+  explore_frac: 0.0             # envs collecting with Ornstein-Uhlenbeck action noise
+  explore_noise: 0.3
+  explore_theta: 2.0
+  actor_lr_scale: 1.0           # stability: actor lr multiplier, ramp, collapse guard
+  actor_ramp_iters: 0
+  collapse_fall_rate: 0.0       # falls per 1000 env steps; 0 = off
+  collapse_snapshot_every: 500
+  init_from: null               # warm start from a checkpoint (weights only)
+  reset_critic: false
+  critic_warmup_iters: 500
+  wm_rewarmup_iters: 1500
+  driver_ckpt: null             # data-collection driver policy (SuperMimic or PPO-Sim)
+  driver_frac: 0.0
+  driver_fade: [1000000000, 1000000000]
 
 # PPO-Sim baseline (scripts/train_ppo.py): BeyondMimic's PPO on SuperMimic's task; network
 # sizes and inputs come from algo.* so both methods use identical actor and critic networks.

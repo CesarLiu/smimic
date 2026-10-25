@@ -294,6 +294,7 @@ def test_checkpoint_roundtrip_and_resume(tmp_path) -> None:
         "wall_time",
         "sim_steps",
         "world_size",
+        "schedule",
         "args",
         "saved_at",
     }
@@ -305,6 +306,7 @@ def test_checkpoint_roundtrip_and_resume(tmp_path) -> None:
         "wall_time",
         "sim_steps",
         "world_size",
+        "schedule",
         "args",
         "saved_at",
     }

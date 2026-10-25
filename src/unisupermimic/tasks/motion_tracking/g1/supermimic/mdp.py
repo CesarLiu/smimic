@@ -18,6 +18,7 @@ from unisupermimic.rl.contracts.supermimic import State
 
 from .kinematics import G1Kinematics
 from .motion import CONTROL_DT, MotionLib
+from .robot import TRACKED_BODIES
 
 STATE_DIM = 71
 NUM_J = 29
@@ -94,6 +95,10 @@ class MDP:
         device = default_q.device
         self.obs_noise = OBS_NOISE.to(device)
         self.obs_scale = OBS_SCALE.to(device)
+        self._ankle_idx = [
+            TRACKED_BODIES.index("left_ankle_roll_link"),
+            TRACKED_BODIES.index("right_ankle_roll_link"),
+        ]
 
     def to(self, device: str | torch.device) -> MDP:
         """Return a copy on ``device``; the original instance is left untouched."""
@@ -283,6 +288,14 @@ class MDP:
             ),
             -1,
         )
+
+    @torch.no_grad()
+    def foot_heights(self, state: State) -> torch.Tensor:
+        """World heights of the two ankle-roll link origins, ``(..., 2)``; about 0.035-0.05 m
+        while a foot is on the ground. Optional hook used by the learner to score
+        world-model windows by contact changes (rare-event sampling)."""
+        body_p = self.kin.forward(*state)[0]
+        return body_p[..., self._ankle_idx, 2]
 
     def normalize_context(self, context: torch.Tensor) -> torch.Tensor:
         return torch.cat(

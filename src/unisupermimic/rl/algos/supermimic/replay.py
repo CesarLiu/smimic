@@ -8,9 +8,10 @@ import torch
 def _make_fields(
     num_joints: int,
     context_dim: int,
+    num_feet: int = 0,
 ) -> dict[str, tuple[int | tuple[()], torch.dtype]]:
     state_dim = 13 + 2 * num_joints
-    return {
+    fields: dict[str, tuple[int | tuple[()], torch.dtype]] = {
         "s": (state_dim, torch.float32),
         "s1": (state_dim, torch.float32),
         "a": (num_joints, torch.float32),
@@ -20,12 +21,17 @@ def _make_fields(
         "f": ((), torch.long),
         "ep_step": ((), torch.int32),
         "done": ((), torch.bool),
+        "term": ((), torch.bool),  # hard termination (a fall); done also covers timeouts
         # root-velocity kick between the previous transition's s1 and this s (zero without pushes)
         "push": (6, torch.float32),
     }
+    if num_feet:  # foot heights of s1 (rare-event world-model sampling)
+        fields["feet"] = (num_feet, torch.float32)
+    return fields
 
 
 FIELDS = _make_fields(29, 33)
+WINDOW_FIELDS = ("s", "s1", "a", "xi", "done", "term", "push", "mask")
 
 
 class ReplayBuffer:
@@ -36,11 +42,13 @@ class ReplayBuffer:
         device: str | torch.device,
         num_joints: int = 29,
         context_dim: int = 33,
+        num_feet: int = 0,
     ):
         self.T = T
         self.N = N
         self.device = torch.device(device)
-        self.fields = _make_fields(num_joints, context_dim)
+        self.fields = _make_fields(num_joints, context_dim, num_feet)
+        self.window_keys = tuple(k for k in (*WINDOW_FIELDS, "feet") if k in self.fields)
         self.data = {}
         for key, (shape, dtype) in self.fields.items():
             field_shape = (T, N) + ((shape,) if isinstance(shape, int) else shape)
@@ -50,8 +58,8 @@ class ReplayBuffer:
 
     def add(self, transition: dict[str, torch.Tensor]) -> None:
         for key in self.fields:
-            if key == "push" and key not in transition:  # envs without push injection
-                self.data[key][self.ptr] = 0.0
+            if key in ("push", "term") and key not in transition:  # optional fields
+                self.data[key][self.ptr] = 0
                 continue
             self.data[key][self.ptr] = transition[key]
         self.ptr = (self.ptr + 1) % self.T
@@ -70,7 +78,7 @@ class ReplayBuffer:
         ages = start.unsqueeze(-1) + torch.arange(k, device=self.device)
         rows = self._row(ages)
         envs = env.unsqueeze(-1).expand_as(rows)
-        out = {key: self.data[key][rows, envs] for key in ("s", "s1", "a", "xi", "done", "push")}
+        out = {key: self.data[key][rows, envs] for key in self.window_keys}
         done = out["done"].float()
         mask = torch.cumprod(
             torch.cat((torch.ones(B, 1, device=self.device), 1 - done[:, :-1]), -1),
@@ -105,4 +113,43 @@ class ReplayBuffer:
         return start, history
 
 
-__all__ = ["FIELDS", "ReplayBuffer"]
+class WindowArchive:
+    """Ring buffer of world-model training windows (rare events kept past the replay's
+    horizon, as in go2-supermimic): ``add`` stores the selected windows, ``sample`` draws
+    uniformly from what is stored."""
+
+    def __init__(self, capacity: int, device: str | torch.device):
+        if capacity <= 0:
+            raise ValueError("archive capacity must be positive")
+        self.capacity = capacity
+        self.device = torch.device(device)
+        self.data: dict[str, torch.Tensor] = {}
+        self.ptr = 0
+        self.size = 0
+
+    def add(self, windows: dict[str, torch.Tensor]) -> None:
+        count = next(iter(windows.values())).shape[0]
+        if count == 0:
+            return
+        if not self.data:  # allocate on first use, shaped like the windows
+            self.data = {
+                key: torch.zeros(
+                    (self.capacity, *value.shape[1:]), dtype=value.dtype, device=self.device
+                )
+                for key, value in windows.items()
+            }
+        count = min(count, self.capacity)
+        rows = (self.ptr + torch.arange(count, device=self.device)) % self.capacity
+        for key, value in windows.items():
+            self.data[key][rows] = value[-count:]
+        self.ptr = (self.ptr + count) % self.capacity
+        self.size = min(self.size + count, self.capacity)
+
+    def sample(self, count: int) -> dict[str, torch.Tensor]:
+        if self.size == 0:
+            raise ValueError("cannot sample from an empty archive")
+        rows = torch.randint(0, self.size, (count,), device=self.device)
+        return {key: value[rows] for key, value in self.data.items()}
+
+
+__all__ = ["FIELDS", "WINDOW_FIELDS", "ReplayBuffer", "WindowArchive"]

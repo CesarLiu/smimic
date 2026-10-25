@@ -201,6 +201,24 @@ uv run unisupermimic-eval --ckpt runs/bones/ckpt_012000.pt --motion_pack data/bo
 
 Evaluation runs in chunks of `eval.max_envs` clips (default 8192). Without `--motion_pack`, it uses the LAFAN library: evaluation may change the motion library, but nothing else in the training contract.
 
+### Training techniques from go2-supermimic
+
+Five task-agnostic techniques from [go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) (Go2 chasing and dodging), each off by default (`algo.*`, documented in `SuperMimicConfig`):
+
+| technique | switch | what it does |
+|---|---|---|
+| rare-event world-model batches | `wm_prioritized_frac`, `wm_archive_frac` | a share of each world-model batch is the rarest of 4× as many candidate windows (foot contact changes, airborne steps, falls); another share comes from an archive of rare windows (flight, hard vertical base motion, falls) kept beyond the replay horizon. Contacts use the task's `foot_heights` hook (G1: ankle-roll links below `contact_height` = 0.10 m) |
+| correlated exploration | `explore_frac` | a share of the envs collects with Ornstein-Uhlenbeck action noise (`explore_noise`, `explore_theta`) instead of white noise |
+| stability | `actor_lr_scale`, `actor_ramp_iters`, `collapse_fall_rate` | actor lr multiplier; linear actor-lr ramp whenever the actor (re)starts; collapse guard: two log windows in a row above the fall rate (per 1000 env steps) restore actor and critic from the last snapshot with half the lr |
+| warm start | `init_from`, `reset_critic` | initialise from another run's checkpoint; a policy whose observation gained terms starts exactly as before (new inputs at zero weight); a fresh critic trains alone for `critic_warmup_iters` |
+| data-collection driver | `driver_ckpt`, `driver_frac`, `driver_fade` | another policy (SuperMimic or PPO-Sim checkpoint) acts in a share of the envs so the world model sees its skills; the share fades out between the two `driver_fade` iterations |
+
+```bash
+uv run tools/launch.py run go2 --gpus 0,1,2,3     # each of rare / explore / stable alone and all three
+uv run unisupermimic-train training.log_dir=runs/driven \
+  algo.driver_ckpt=runs/uni_ppo_g1/ckpt_XXXXXX.pt algo.driver_frac=0.25 algo.driver_fade=[2000,6000]
+```
+
 ### Experiment launcher (H100/H200)
 
 `tools/launch.py` queues named experiments over the visible GPUs (strict FIFO, one job per free GPU or GPU group). Each job trains, then evaluates the final checkpoint: nominal plus pushes of 0.5, 1.0, and 1.5 m/s, and the BONES pack for BONES runs. `tools/report_push.py` prints the table, with mean ± std over seeds.
@@ -213,7 +231,7 @@ uv run tools/launch.py eval push_ab --curve       # nominal eval of every saved 
 uv run tools/report_push.py
 ```
 
-Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`. On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
+Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`, `go2` (training techniques from go2-supermimic). On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
 
 ## Results
 

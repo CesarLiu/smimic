@@ -35,6 +35,15 @@ FINAL_ITERATION = 12000  # the default algo.iterations
 PUSH_SIM = ["env.commands.motion.push_scale=1.0"]
 PUSH_IMAG = ["algo.imag_push_rate=0.01", "algo.imag_push_scale=1.0"]
 
+# Training techniques from go2-supermimic (SuperMimicConfig in learner.py), each off by default.
+# Rare-event world-model batches: 25 % rarest of 4x candidates + 25 % from the archive.
+RARE = ["algo.wm_prioritized_frac=0.25", "algo.wm_archive_frac=0.25"]
+# A quarter of the envs collect with temporally correlated (OU) action noise.
+EXPLORE = ["algo.explore_frac=0.25"]
+# Actor lr ramp after the world-model-only phase; collapse guard at 2 falls per 1000 env steps
+# (the L4 baseline is below 0.7 after 1k iterations and about 0.02 after 6k).
+STABLE = ["algo.actor_ramp_iters=500", "algo.collapse_fall_rate=2.0"]
+
 E: dict[str, dict] = {}
 
 
@@ -85,6 +94,12 @@ experiment(
     pack=BONES_PACK,
 )
 
+# go2-supermimic techniques on G1 tracking: each alone and all together (compare with uni_base)
+experiment("uni_rare_s0", ["algo.seed=0"] + RARE, "rare-event world-model batches")
+experiment("uni_explore_s0", ["algo.seed=0"] + EXPLORE, "correlated exploration noise")
+experiment("uni_stable_s0", ["algo.seed=0"] + STABLE, "actor lr ramp + collapse guard")
+experiment("uni_go2_all_s0", ["algo.seed=0"] + RARE + EXPLORE + STABLE, "all three together")
+
 GROUPS = {
     "push_ab": ["uni_base_s0", "uni_push_s0"],
     "push_ablation": ["uni_push_sim_s0", "uni_push_imag_s0"],
@@ -92,6 +107,7 @@ GROUPS = {
     "multi_gpu": ["uni_base_g2_s0", "uni_push_g2_s0"],
     "ppo": ["uni_ppo_g1", "uni_ppo_g4", "uni_ppo_g8"],
     "bones": ["uni_bones_s0", "uni_bones_g2_s0"],
+    "go2": ["uni_rare_s0", "uni_explore_s0", "uni_stable_s0", "uni_go2_all_s0"],
 }
 
 

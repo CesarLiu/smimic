@@ -205,6 +205,24 @@ uv run unisupermimic-eval --ckpt runs/bones/ckpt_012000.pt --motion_pack data/bo
 
 评测按每块 `eval.max_envs` 个片段分块进行（默认 8192）。不加 `--motion_pack` 时在 LAFAN 上评测。评测时可以更换动作库，但训练配置中的其他部分都不能改。
 
+### 来自 go2-supermimic 的训练技巧
+
+从 [go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic)（Go2 追逐与躲避）移植了五项与任务无关的技巧，默认全部关闭。开关都在 `algo.*` 下，说明见 `SuperMimicConfig`：
+
+| 技巧 | 开关 | 作用 |
+|---|---|---|
+| 世界模型稀有事件采样 | `wm_prioritized_frac`、`wm_archive_frac` | 每批世界模型训练数据中，一部分取自 4 倍候选窗口里最稀有的（脚部接触切换、腾空、摔倒），另一部分取自稀有窗口存档（腾空、剧烈的竖直方向运动、摔倒），存档保留的时间比 replay 更长。接触判断用任务提供的 `foot_heights`：G1 上踝关节 roll link 低于 `contact_height`（0.10 m）算接触 |
+| 时间相关的探索噪声 | `explore_frac` | 一部分环境改用 Ornstein-Uhlenbeck 动作噪声（`explore_noise`、`explore_theta`）采集数据，而不是白噪声 |
+| 稳定性 | `actor_lr_scale`、`actor_ramp_iters`、`collapse_fall_rate` | actor 学习率倍数；actor 每次开始或重新开始更新时，学习率线性爬升；崩溃保护：连续两个日志窗口的摔倒率（每 1000 个环境步）超过阈值时，把 actor 和 critic 恢复到上一个快照，学习率减半 |
+| 热启动 | `init_from`、`reset_critic` | 从另一个实验的 checkpoint 初始化。如果策略的观测新增了项，新输入的权重从零开始，初始行为与原策略完全一致；新建的 critic 先单独训练 `critic_warmup_iters` 次迭代 |
+| 数据采集 driver | `driver_ckpt`、`driver_frac`、`driver_fade` | 用另一个策略（SuperMimic 或 PPO-Sim 的 checkpoint）控制一部分环境，让世界模型见到它的动作；这部分比例在 `driver_fade` 给出的两个迭代数之间逐渐降到零 |
+
+```bash
+uv run tools/launch.py run go2 --gpus 0,1,2,3     # rare / explore / stable 各自单独，以及三者一起
+uv run unisupermimic-train training.log_dir=runs/driven \
+  algo.driver_ckpt=runs/uni_ppo_g1/ckpt_XXXXXX.pt algo.driver_frac=0.25 algo.driver_fade=[2000,6000]
+```
+
 ### 实验启动器（H100/H200）
 
 `tools/launch.py` 把命名好的实验按可见 GPU 排队：严格先进先出，每块（或每组）空闲 GPU 跑一个任务。每个任务训练完成后评测最终 checkpoint，包括常规评测和 0.5、1.0、1.5 m/s 三档推力；BONES 实验还会在 BONES 动作库上评测。`tools/report_push.py` 汇总结果表，多个种子时给出均值 ± 标准差。
@@ -223,7 +241,8 @@ uv run tools/report_push.py
 - `push_seeds`：更多种子；
 - `multi_gpu`；
 - `ppo`：1/4/8 GPU；
-- `bones`。
+- `bones`；
+- `go2`：来自 go2-supermimic 的训练技巧。
 
 在单块 L4 上，默认的 12k 迭代训练约需 5 小时，四次评测约需 1.4 小时。
 

@@ -150,9 +150,12 @@ nohup uv run tools/launch.py run push_seeds push_ablation --gpus 0,1,2,3 > launc
 | 2 | `push_ablation` | 只有仿真器冲量 / 只有想象冲量 | 每个 1 块 | 看两部分各自的贡献 |
 | 3 | `multi_gpu` | 基线 / 推力注入，双卡 DDP | 每个 2 块 | 学习率自动乘 √2 |
 | 4 | `bones` | BONES-SEED 动作库，单卡 / 双卡 | 1 块 / 2 块 | 先准备数据，见下 |
-| 5 | `ppo` | PPO-Sim，1 / 4 / 8 卡，各 18 小时 | 1 / 4 / 8 块 | 最耗时，最后跑 |
+| 5 | `go2` | 来自 go2-supermimic 的技巧：稀有事件采样 / 探索噪声 / 稳定性各自单独，以及三者一起（4 个任务） | 每个 1 块 | 与 `uni_base_s0` 对比；README "来自 go2-supermimic 的训练技巧" |
+| 6 | `ppo` | PPO-Sim，1 / 4 / 8 卡，各 18 小时 | 1 / 4 / 8 块 | 最耗时，最后跑 |
 
 推力方向确认有效后，下一步移植"按世界模型误差选 reset"，届时会在启动器里加新的实验名。
+
+`go2` 组的四个实验与 push 无关，GPU 有空闲时可以和前面的组并行排队。热启动（`algo.init_from`）和数据采集 driver（`algo.driver_ckpt`）需要先有一个训练好的 checkpoint，所以没有预设实验名，用法见 README。
 
 ### BONES-SEED 数据准备（只做一次）
 

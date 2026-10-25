@@ -272,3 +272,19 @@ def test_perfect_tracking_reward_and_termination(library) -> None:
         ]
     )
     assert mdp.termination(tilt_state, frames).tolist() == [False, True, False, False]
+
+
+def test_foot_heights_are_the_ankle_link_heights(library) -> None:
+    kin, motion, mdp = library
+    frames = torch.tensor([0, 30, 60])
+    state = motion.ref_state(frames)
+    heights = mdp.foot_heights(state)
+    body_p = kin.forward(*state)[0]
+    left = TRACKED_BODIES.index("left_ankle_roll_link")
+    right = TRACKED_BODIES.index("right_ankle_roll_link")
+    assert heights.shape == (3, 2)
+    torch.testing.assert_close(heights, body_p[:, [left, right], 2])
+
+    raised = tuple(value.clone() for value in state)
+    raised[0][:, 2] += 0.5  # lifting the root lifts both feet by the same amount
+    torch.testing.assert_close(mdp.foot_heights(raised), heights + 0.5)

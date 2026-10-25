@@ -41,7 +41,7 @@ def build_learner_config(cfg: DictConfig) -> SuperMimicConfig:
     values = {
         field.name: raw[field.name] for field in fields(SuperMimicConfig) if field.name in raw
     }
-    for name in ("wm_hidden", "policy_hidden", "critic_hidden", "test_hidden_dims"):
+    for name in ("wm_hidden", "policy_hidden", "critic_hidden", "test_hidden_dims", "driver_fade"):
         if values.get(name) is not None:
             values[name] = tuple(values[name])
     return SuperMimicConfig(**values)
