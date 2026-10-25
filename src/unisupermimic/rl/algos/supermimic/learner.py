@@ -755,7 +755,9 @@ class SuperMimicLearner:
                             learning_rate,
                         ]
                         if self.world_size > 1:  # metrics averaged over ranks
-                            values = torch.tensor(row[3:14], dtype=torch.float64, device=self.device)
+                            values = torch.tensor(
+                                row[3:14], dtype=torch.float64, device=self.device
+                            )
                             row[3:14] = distributed.allreduce_mean_(values).tolist()
                         log_file.write(
                             ",".join(

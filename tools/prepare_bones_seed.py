@@ -47,12 +47,58 @@ MJCF = ROOT / "src/unisupermimic/assets/robots/g1/supermimic.xml"
 OUT_FPS = 50.0
 
 NAME_KEYWORDS = (
-    "stair", "stairs", "step_up", "step_down", "steps_up", "ladder", "box", "boxes", "crate",
-    "chair", "sit", "sitting", "sits", "seated", "bench", "stool", "sofa", "couch", "bed",
-    "table", "desk", "climb", "climbing", "climbs", "fence", "wall", "ledge", "platform",
-    "jump_off", "jumpoff", "jumping_off", "jump_over", "vault", "hurdle", "railing", "rail",
-    "ramp", "slope", "car", "bike", "bicycle", "horse", "swing", "obstacle", "lean_on",
-    "leaning_on", "kneel_on", "stand_on", "standing_on", "walk_on", "onto", "up_on",
+    "stair",
+    "stairs",
+    "step_up",
+    "step_down",
+    "steps_up",
+    "ladder",
+    "box",
+    "boxes",
+    "crate",
+    "chair",
+    "sit",
+    "sitting",
+    "sits",
+    "seated",
+    "bench",
+    "stool",
+    "sofa",
+    "couch",
+    "bed",
+    "table",
+    "desk",
+    "climb",
+    "climbing",
+    "climbs",
+    "fence",
+    "wall",
+    "ledge",
+    "platform",
+    "jump_off",
+    "jumpoff",
+    "jumping_off",
+    "jump_over",
+    "vault",
+    "hurdle",
+    "railing",
+    "rail",
+    "ramp",
+    "slope",
+    "car",
+    "bike",
+    "bicycle",
+    "horse",
+    "swing",
+    "obstacle",
+    "lean_on",
+    "leaning_on",
+    "kneel_on",
+    "stand_on",
+    "standing_on",
+    "walk_on",
+    "onto",
+    "up_on",
 )
 
 
@@ -69,6 +115,7 @@ def name_rejected(name: str) -> bool:
 
 
 # ---------------- CSV layout ----------------
+
 
 def read_csv(path: str) -> tuple[list[str] | None, np.ndarray]:
     with open(path, encoding="utf-8") as stream:
@@ -89,8 +136,12 @@ def detect_layout(samples: list[np.ndarray], quat="auto", deg="auto", cm="auto")
     skip = columns - 36
     x = np.concatenate([s[:, skip:] for s in samples])
     if quat == "auto":
+
         def upright(q):  # pelvis R22, ~1 when upright
-            return np.median(1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2) / np.maximum((q * q).sum(1), 1e-9))
+            return np.median(
+                1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2) / np.maximum((q * q).sum(1), 1e-9)
+            )
+
         quat = "wxyz" if upright(x[:, 3:7]) >= upright(x[:, [6, 3, 4, 5]]) else "xyzw"
     if deg == "auto":
         deg = bool(np.abs(x[:, 7:]).max() > 2 * np.pi * 1.5)
@@ -101,7 +152,7 @@ def detect_layout(samples: list[np.ndarray], quat="auto", deg="auto", cm="auto")
 
 def to_lafan_rows(rows: np.ndarray, layout: dict) -> np.ndarray:
     """Any detected layout -> LAFAN rows (pos m, quat xyzw unit, 29 joints rad)."""
-    a = rows[:, layout["skip"]:]
+    a = rows[:, layout["skip"] :]
     pos = a[:, 0:3] / (100.0 if layout["cm"] else 1.0)
     q = a[:, [4, 5, 6, 3]] if layout["quat"] == "wxyz" else a[:, 3:7]
     q = q / np.linalg.norm(q, axis=1, keepdims=True)
@@ -166,9 +217,11 @@ def feasibility_reason(pos: np.ndarray, quat_wxyz: np.ndarray, joints: np.ndarra
         return "elevated_support"
     if zmin.min() < -0.12 or (zmin < -0.08).mean() > 0.8:
         return "ground_penetration"
-    w, x, y = quat_wxyz[:, 0], quat_wxyz[:, 1], quat_wxyz[:, 2]
+    x, y = quat_wxyz[:, 1], quat_wxyz[:, 2]
     upright = 1 - 2 * (x * x + y * y)
-    speed = np.linalg.norm(np.gradient(pos, 1.0 / OUT_FPS, axis=0), axis=1) if n > 1 else np.zeros(n)
+    speed = (
+        np.linalg.norm(np.gradient(pos, 1.0 / OUT_FPS, axis=0), axis=1) if n > 1 else np.zeros(n)
+    )
     floating = (foot > 0.02).all(1) & (upright > 0.9) & (pos[:, 2] > 0.65) & (speed < 0.15)
     if longest(floating) >= int(0.5 * OUT_FPS):
         return "floating_feet"
@@ -176,6 +229,7 @@ def feasibility_reason(pos: np.ndarray, quat_wxyz: np.ndarray, joints: np.ndarra
 
 
 # ---------------- worker ----------------
+
 
 def _process(job: tuple[str, str, float | None, int, float | None, dict | None, bool]):
     """(name, path, fixed fps, metadata duration @120 fps, fps override, layout or None for
@@ -204,6 +258,7 @@ def _process(job: tuple[str, str, float | None, int, float | None, dict | None, 
 
 # ---------------- packed library writer ----------------
 
+
 class PackWriter:
     """Shards to <out>/_shards, then merges into memory-mappable .npy arrays."""
 
@@ -226,10 +281,12 @@ class PackWriter:
     def _flush(self) -> None:
         if not self.buffer:
             return
-        np.savez(self.shards / f"{self.count:05d}.npz",
-                 root_pos=np.concatenate([c[0] for c in self.buffer]),
-                 root_quat=np.concatenate([c[1] for c in self.buffer]),
-                 joints=np.concatenate([c[2] for c in self.buffer]))
+        np.savez(
+            self.shards / f"{self.count:05d}.npz",
+            root_pos=np.concatenate([c[0] for c in self.buffer]),
+            root_quat=np.concatenate([c[1] for c in self.buffer]),
+            joints=np.concatenate([c[2] for c in self.buffer]),
+        )
         self.count += 1
         self.buffer = []
 
@@ -237,27 +294,39 @@ class PackWriter:
         self._flush()
         frames = int(sum(self.lengths))
         widths = {"root_pos": 3, "root_quat": 4, "joints": 29}
-        arrays = {k: np.lib.format.open_memmap(self.out / f"{k}.npy", mode="w+", dtype=np.float32,
-                                               shape=(frames, w)) for k, w in widths.items()}
+        arrays = {
+            k: np.lib.format.open_memmap(
+                self.out / f"{k}.npy", mode="w+", dtype=np.float32, shape=(frames, w)
+            )
+            for k, w in widths.items()
+        }
         offset = 0
         for index in range(self.count):
             shard = np.load(self.shards / f"{index:05d}.npz")
             n = shard["root_pos"].shape[0]
             for key in widths:
-                arrays[key][offset:offset + n] = shard[key]
+                arrays[key][offset : offset + n] = shard[key]
             offset += n
         for array in arrays.values():
             array.flush()
         np.save(self.out / "clip_len.npy", np.asarray(self.lengths, dtype=np.int64))
         (self.out / "names.txt").write_text("\n".join(self.names), encoding="utf-8")
-        meta = dict(meta, n_clips=len(self.names), n_frames=frames, fps=OUT_FPS,
-                    hours=frames / OUT_FPS / 3600)
+        meta = dict(
+            meta,
+            n_clips=len(self.names),
+            n_frames=frames,
+            fps=OUT_FPS,
+            hours=frames / OUT_FPS / 3600,
+        )
         (self.out / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
         shutil.rmtree(self.shards)
-        print(f"pack: {meta['n_clips']} clips, {frames} frames, {meta['hours']:.2f} h -> {self.out}")
+        print(
+            f"pack: {meta['n_clips']} clips, {frames} frames, {meta['hours']:.2f} h -> {self.out}"
+        )
 
 
 # ---------------- commands ----------------
+
 
 def list_bones(root: str) -> list[tuple[str, str, int]]:
     meta = sorted(glob.glob(os.path.join(root, "metadata", "seed_metadata_v00*.parquet")))
@@ -269,9 +338,13 @@ def list_bones(root: str) -> list[tuple[str, str, int]]:
         for _, record in frame.iterrows():
             path = os.path.join(root, str(record["move_g1_mujoco_path"]).lstrip("/"))
             if not os.path.exists(path):
-                found = glob.glob(os.path.join(root, "g1", "**", os.path.basename(path)), recursive=True)
+                found = glob.glob(
+                    os.path.join(root, "g1", "**", os.path.basename(path)), recursive=True
+                )
                 path = found[0] if found else path
-            rows.append((str(record["filename"]), path, int(record.get("move_duration_frames", 0) or 0)))
+            rows.append(
+                (str(record["filename"]), path, int(record.get("move_duration_frames", 0) or 0))
+            )
     else:
         for path in sorted(glob.glob(os.path.join(root, "g1", "**", "*.csv"), recursive=True)):
             rows.append((os.path.splitext(os.path.basename(path))[0], path, 0))
@@ -285,8 +358,10 @@ def cmd_download(args) -> None:
 
     os.makedirs(args.root, exist_ok=True)
     for name in ("metadata/seed_metadata_v004.parquet", "g1.tar.gz"):
-        print("downloaded", hf_hub_download("bones-studio/seed", name, repo_type="dataset",
-                                            local_dir=args.root))
+        print(
+            "downloaded",
+            hf_hub_download("bones-studio/seed", name, repo_type="dataset", local_dir=args.root),
+        )
     with tarfile.open(os.path.join(args.root, "g1.tar.gz")) as archive:
         archive.extractall(args.root, filter="data")
 
@@ -298,15 +373,22 @@ def cmd_inspect(args) -> None:
     sample = [rows[i] for i in rng.choice(len(rows), size=min(20, len(rows)), replace=False)]
     for name, path, _ in sample[:3]:
         header, data = read_csv(path)
-        print(f"\n{path}\n  header: {header}\n  shape: {data.shape}  first row: "
-              f"{np.round(data[0], 4).tolist()}")
+        print(
+            f"\n{path}\n  header: {header}\n  shape: {data.shape}  first row: "
+            f"{np.round(data[0], 4).tolist()}"
+        )
     arrays = [read_csv(path)[1] for _, path, _ in sample]
     layout = detect_layout(arrays, args.quat, args.deg, args.cm)
     print("\ndetected layout:", layout)
-    print("source fps:", sorted({source_fps(a.shape[0], d, args.fps) for a, (_, _, d) in zip(arrays, sample)}))
+    print(
+        "source fps:",
+        sorted({source_fps(a.shape[0], d, args.fps) for a, (_, _, d) in zip(arrays, sample)}),
+    )
     lafan = to_lafan_rows(arrays[0], layout)
-    print(f"root z median {np.median(lafan[:, 2]):.3f} m, joints [{lafan[:, 7:].min():.2f}, "
-          f"{lafan[:, 7:].max():.2f}] rad")
+    print(
+        f"root z median {np.median(lafan[:, 2]):.3f} m, joints [{lafan[:, 7:].min():.2f}, "
+        f"{lafan[:, 7:].max():.2f}] rad"
+    )
 
 
 def _run(jobs: list, out: str, workers: int, meta: dict) -> None:
@@ -330,25 +412,35 @@ def _run(jobs: list, out: str, workers: int, meta: dict) -> None:
 def cmd_build(args) -> None:
     rows = list_bones(args.root)
     kept = [r for r in rows if not name_rejected(r[0])]
-    print(f"{len(rows)} clips; name filter removed {len(rows) - len(kept)} (paper: 12,553) -> {len(kept)}")
+    print(
+        f"{len(rows)} clips; name filter removed {len(rows) - len(kept)} (paper: 12,553) -> {len(kept)}"
+    )
     rng = np.random.default_rng(0)
     sample = [kept[i] for i in rng.choice(len(kept), size=min(50, len(kept)), replace=False)]
     layout = detect_layout([read_csv(p)[1] for _, p, _ in sample], args.quat, args.deg, args.cm)
     print("layout:", layout)
     jobs = [(name, path, None, duration, args.fps, layout, True) for name, path, duration in kept]
-    _run(jobs, args.out, args.workers,
-         dict(source="BONES-SEED g1", layout=layout, name_filter_removed=len(rows) - len(kept)))
+    _run(
+        jobs,
+        args.out,
+        args.workers,
+        dict(source="BONES-SEED g1", layout=layout, name_filter_removed=len(rows) - len(kept)),
+    )
 
 
 def cmd_pack_csv(args) -> None:
     files = sorted({f for pattern in args.files for f in glob.glob(pattern)})
-    jobs = [(os.path.splitext(os.path.basename(f))[0], f, args.src_fps, 0, None, None, args.feasibility)
-            for f in files]
+    jobs = [
+        (os.path.splitext(os.path.basename(f))[0], f, args.src_fps, 0, None, None, args.feasibility)
+        for f in files
+    ]
     _run(jobs, args.out, args.workers, dict(source="csv", src_fps=args.src_fps))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("download", "inspect", "build"):
         p = sub.add_parser(name)
@@ -369,8 +461,12 @@ def main() -> None:
     for key in ("deg", "cm"):
         if getattr(args, key, "auto") in ("true", "false"):
             setattr(args, key, getattr(args, key) == "true")
-    {"download": cmd_download, "inspect": cmd_inspect, "build": cmd_build,
-     "pack-csv": cmd_pack_csv}[args.cmd](args)
+    {
+        "download": cmd_download,
+        "inspect": cmd_inspect,
+        "build": cmd_build,
+        "pack-csv": cmd_pack_csv,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":

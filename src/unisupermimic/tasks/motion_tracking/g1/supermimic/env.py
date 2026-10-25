@@ -31,7 +31,6 @@ from .manager_terms import (
 from .motion import CONTROL_DT
 from .robot import COLLISION_GEOM_NAMES
 
-
 PUSH_TERM = "supermimic_push"
 
 

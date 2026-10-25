@@ -47,9 +47,20 @@ def test_pack_loads_identically_to_csv(tmp_path) -> None:
 
 def test_name_filter_flags_terrain_and_object_clips() -> None:
     reject = prepare_bones_seed.name_rejected
-    for name in ("walk_up_stairs_01", "sit_down_on_chair", "climb_ladder_R", "jump_off_box",
-                 "Lean_On_Wall_002"):
+    for name in (
+        "walk_up_stairs_01",
+        "sit_down_on_chair",
+        "climb_ladder_R",
+        "jump_off_box",
+        "Lean_On_Wall_002",
+    ):
         assert reject(name), name
-    for name in ("walk_forward_01", "dance_routine_3", "side_roll_left", "position_hold",
-                 "carry_newspaper", "boxing_jab"):
+    for name in (
+        "walk_forward_01",
+        "dance_routine_3",
+        "side_roll_left",
+        "position_hold",
+        "carry_newspaper",
+        "boxing_jab",
+    ):
         assert not reject(name), name

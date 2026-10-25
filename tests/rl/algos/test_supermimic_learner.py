@@ -299,7 +299,14 @@ def test_checkpoint_roundtrip_and_resume(tmp_path) -> None:
     }
     small = torch.load(tmp_path / "ckpt_000001.pt", weights_only=True)
     assert set(small) == {
-        "wm", "pi", "iteration", "wall_time", "sim_steps", "world_size", "args", "saved_at"
+        "wm",
+        "pi",
+        "iteration",
+        "wall_time",
+        "sim_steps",
+        "world_size",
+        "args",
+        "saved_at",
     }
     assert small["world_size"] == 1
     with (tmp_path / "train_log.csv").open(encoding="utf-8", newline="") as stream:

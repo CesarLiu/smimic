@@ -94,7 +94,9 @@ def test_apply_root_push_changes_root_velocity_by_the_kick(tmp_path, backend_nam
         )
         mask = torch.tensor([True, False], device=env.device)
         current = env.apply_root_push(push, mask)
-        torch.testing.assert_close(current["s"][:, 7:13] - before[:, 7:13], push, atol=2e-4, rtol=0.0)
+        torch.testing.assert_close(
+            current["s"][:, 7:13] - before[:, 7:13], push, atol=2e-4, rtol=0.0
+        )
         torch.testing.assert_close(current["s"][:, :7], before[:, :7], atol=1e-5, rtol=0.0)
         assert current is env.state.info[SUPERMIMIC_STATE_KEY]
     finally:

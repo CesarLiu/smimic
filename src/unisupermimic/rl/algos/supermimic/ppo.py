@@ -113,12 +113,15 @@ class PPOLearner:
         self.iteration, self.sim_steps, self.wall_time = 0, 0, 0.0
         if distributed.is_main():
             with (self.log_dir / "args.json").open("w", encoding="utf-8") as stream:
-                json.dump(dict(asdict(cfg), algo="ppo", world_size=self.world_size), stream, indent=2)
+                json.dump(
+                    dict(asdict(cfg), algo="ppo", world_size=self.world_size), stream, indent=2
+                )
 
     # ---- inputs (identical to SuperMimic's) ----
     def _state_info(self) -> dict[str, torch.Tensor]:
         state = self.env.state if self.env.state is not None else self.env.init_state()
-        return state.info[SUPERMIMIC_STATE_KEY]
+        info: dict[str, torch.Tensor] = state.info[SUPERMIMIC_STATE_KEY]
+        return info
 
     def _critic_input(self, flat_state, frames, context) -> torch.Tensor:
         state = unflatten_state(flat_state)
@@ -139,7 +142,9 @@ class PPOLearner:
         buf: dict[str, list[torch.Tensor]] = {
             k: [] for k in ("hist", "goal", "critic", "a", "logp", "mu", "v", "r", "done")
         }
-        stats = {"r": [], "ep_ret": [], "term": 0.0, "done": 0.0}
+        rewards: list[torch.Tensor] = []
+        episode_returns: list[torch.Tensor] = []
+        terms = dones = 0.0
         for _ in range(T):
             info = self._state_info()
             state = unflatten_state(info["s"])
@@ -164,19 +169,27 @@ class PPOLearner:
             if bool(truncated.any()):  # bootstrap time-outs and clip ends
                 next_x = self._critic_input(transition["s1"], transition["f"] + 1, transition["xi"])
                 reward += self.cfg.gamma * truncated.float() * self.critic(next_x).float()
-            for key, item in (("hist", self.obs_hist.clone()), ("goal", goal), ("critic", critic_x),
-                              ("a", action), ("logp", self._log_prob(action, mean)), ("mu", mean),
-                              ("v", value), ("r", reward), ("done", done.float())):
+            for key, item in (
+                ("hist", self.obs_hist.clone()),
+                ("goal", goal),
+                ("critic", critic_x),
+                ("a", action),
+                ("logp", self._log_prob(action, mean)),
+                ("mu", mean),
+                ("v", value),
+                ("r", reward),
+                ("done", done.float()),
+            ):
                 buf[key].append(item)
             self.sim_steps += n
-            stats["r"].append(transition["r"].mean() / self.mdp.max_step_reward)
+            rewards.append(transition["r"].mean() / self.mdp.max_step_reward)
             if "ep_ret_norm" in transition:
-                stats["ep_ret"].append(transition["ep_ret_norm"].mean())
-            stats["term"] += float(term.float().sum())
-            stats["done"] += float(done.float().sum())
+                episode_returns.append(transition["ep_ret_norm"].mean())
+            terms += float(term.float().sum())
+            dones += float(done.float().sum())
         info = self._state_info()
         last_value = self.critic(self._critic_input(info["s"], info["f"], info["xi"])).float()
-        out = {k: torch.stack(v) for k, v in buf.items()}
+        out: dict[str, Any] = {k: torch.stack(v) for k, v in buf.items()}
         advantages = torch.zeros_like(out["r"])
         gae = torch.zeros(n, device=self.device)
         for t in range(T - 1, -1, -1):
@@ -187,7 +200,7 @@ class PPOLearner:
             advantages[t] = gae
         out["ret"] = advantages + out["v"]
         out["adv"] = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        out["stats"] = stats
+        out["stats"] = {"r": rewards, "ep_ret": episode_returns, "term": terms, "done": dones}
         return out
 
     # ---- PPO update ----
@@ -212,13 +225,19 @@ class PPOLearner:
                 clipped = mb["v"] + (value - mb["v"]).clamp(-self.cfg.clip, self.cfg.clip)
                 value_loss = torch.max((value - mb["ret"]) ** 2, (clipped - mb["ret"]) ** 2).mean()
                 entropy = (self.log_std + 0.5 * math.log(2 * math.pi * math.e)).sum()
-                loss = surrogate + self.cfg.value_coef * value_loss - self.cfg.entropy_coef * entropy
+                loss = (
+                    surrogate + self.cfg.value_coef * value_loss - self.cfg.entropy_coef * entropy
+                )
                 with torch.no_grad():  # adaptive lr on the KL between old and new Gaussians
                     kl = (
-                        torch.log(std / old_std)
-                        + (old_std**2 + (mb["mu"] - mean) ** 2) / (2 * std**2)
-                        - 0.5
-                    ).sum(-1).mean()
+                        (
+                            torch.log(std / old_std)
+                            + (old_std**2 + (mb["mu"] - mean) ** 2) / (2 * std**2)
+                            - 0.5
+                        )
+                        .sum(-1)
+                        .mean()
+                    )
                     kl = distributed.allreduce_mean_(kl)  # identical lr on every rank
                     kls.append(float(kl))
                     if kl > 2 * self.cfg.desired_kl:
@@ -272,16 +291,32 @@ class PPOLearner:
                     s = batch["stats"]
                     mean = lambda xs: float(sum(float(x) for x in xs) / max(len(xs), 1))  # noqa: E731
                     values = torch.tensor(
-                        [mean(s["r"]), mean(s["ep_ret"]), s["term"] / max(s["done"], 1.0),
-                         float(self.log_std.exp().mean()), kl, value_loss],
-                        dtype=torch.float64, device=self.device,
+                        [
+                            mean(s["r"]),
+                            mean(s["ep_ret"]),
+                            s["term"] / max(s["done"], 1.0),
+                            float(self.log_std.exp().mean()),
+                            kl,
+                            value_loss,
+                        ],
+                        dtype=torch.float64,
+                        device=self.device,
                     )
                     values = distributed.allreduce_mean_(values).tolist()
-                    row = [self.iteration, self.wall_time / 3600, self.sim_steps * self.world_size,
-                           *values[:4], values[4], values[5], self.lr,
-                           self.cfg.log_every / (time.time() - log_start)]
+                    row = [
+                        self.iteration,
+                        self.wall_time / 3600,
+                        self.sim_steps * self.world_size,
+                        *values[:4],
+                        values[4],
+                        values[5],
+                        self.lr,
+                        self.cfg.log_every / (time.time() - log_start),
+                    ]
                     log_start = time.time()
-                    log.write(",".join(f"{v:.6g}" if isinstance(v, float) else str(v) for v in row) + "\n")
+                    log.write(
+                        ",".join(f"{v:.6g}" if isinstance(v, float) else str(v) for v in row) + "\n"
+                    )
                     log.flush()
                     rows += 1
                 if time.time() - last_ckpt > self.cfg.ckpt_minutes * 60:
@@ -289,7 +324,9 @@ class PPOLearner:
                     last_ckpt = time.time()
                 # rank 0 decides when the wall-clock budget is spent, so no rank leaves early
                 stop = torch.tensor(
-                    float(distributed.is_main() and time.time() - start > self.cfg.max_hours * 3600),
+                    float(
+                        distributed.is_main() and time.time() - start > self.cfg.max_hours * 3600
+                    ),
                     device=self.device,
                 )
                 if self.world_size > 1:

@@ -28,7 +28,17 @@ from unisupermimic.rl.algos.supermimic.ppo import PPOConfig, PPOLearner
 from unisupermimic.scripts.train_supermimic import _close_env, build_env_override
 from unisupermimic.sim2sim import extract_contract_snapshot
 
-SHARED = ("goal_frames", "hist", "z_dim", "policy_hidden", "critic_hidden", "gamma", "lam", "amp", "seed")
+SHARED = (
+    "goal_frames",
+    "hist",
+    "z_dim",
+    "policy_hidden",
+    "critic_hidden",
+    "gamma",
+    "lam",
+    "amp",
+    "seed",
+)
 
 
 def build_ppo_config(cfg: DictConfig) -> PPOConfig:
@@ -57,12 +67,18 @@ def main(cfg: DictConfig) -> None:
         device = bound_device
     env_override = build_env_override(cfg, eval_mode=False, learner_device=str(device))
     chosen = str(resolve_run_log_dir(cfg)) if distributed.is_main() else None
-    log_dir = Path(distributed.broadcast_object(chosen))
+    chosen = distributed.broadcast_object(chosen)  # rank 0 picks the run directory
+    assert chosen is not None
+    log_dir = Path(chosen)
     if distributed.is_main():
         write_run_config_snapshot(
             log_dir,
-            run_metadata={"algo": "ppo", "task": str(cfg.training.task_name),
-                          "sim_backend": str(cfg.training.sim_backend), "device": str(device)},
+            run_metadata={
+                "algo": "ppo",
+                "task": str(cfg.training.task_name),
+                "sim_backend": str(cfg.training.sim_backend),
+                "device": str(device),
+            },
             full_cfg=cfg,
             contract_snapshot=extract_contract_snapshot(cfg),
         )

@@ -147,13 +147,16 @@ def main(cfg: DictConfig) -> None:
             cfg,
             algo_name="supermimic",
             strict=bool(cfg.training.sim2sim_strict),
+            allow_library_change=True,  # play_only evaluates, possibly on another library
         )
         log_dir = checkpoint.parent
     elif checkpoint is not None:
         log_dir = checkpoint.parent
     else:
         chosen = str(resolve_run_log_dir(cfg)) if distributed.is_main() else None
-        log_dir = Path(distributed.broadcast_object(chosen))  # rank 0 picks the run directory
+        chosen = distributed.broadcast_object(chosen)  # rank 0 picks the run directory
+        assert chosen is not None
+        log_dir = Path(chosen)
     if not play_only and checkpoint is None and distributed.is_main():
         write_run_config_snapshot(
             log_dir,

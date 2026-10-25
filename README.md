@@ -114,7 +114,7 @@ Use the same `task=g1_super_mimic/<backend>` override when resuming or evaluatin
 
 ## Evaluation
 
-Evaluation creates one environment per motion, starts from its first frame, disables observation and action noise, and runs the complete clip. Strict sim2sim validation checks policy I/O, network shape, motion library, and MJCF identity before environment construction.
+Evaluation creates one environment per motion, starts from its first frame, disables observation and action noise, and runs the complete clip. Strict sim2sim validation checks policy I/O, network shape, and MJCF identity before environment construction; evaluation may use another motion library (`--motion_pack`), and only the library is allowed to differ.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-train \
@@ -146,6 +146,74 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=egl uv run unisupermimic-video \
 ```
 
 By default, the reference root XY is aligned with the policy to highlight whole-body tracking. Pass `--global-ghost` to preserve the reference motion's global displacement.
+
+Several checkpoints render side by side (one panel each, with the running score and a banner once a panel falls), several clips write `<output stem>_<clip>.mp4` each, and `--push_speed` replays the push test (mjwarp). The rollout is the deterministic evaluation loop itself. To keep the GPU free, render on the CPU MuJoCo backend; `tools/softgl.sh` installs Mesa software OpenGL on first use for machines without an EGL driver:
+
+```bash
+source tools/softgl.sh
+CUDA_VISIBLE_DEVICES= uv run unisupermimic-video --backend mujoco \
+  --ckpt runs/uni_base_s0/ckpt_012000.pt runs/uni_push_s0/ckpt_012000.pt \
+  --labels baseline "push injection" \
+  --clip dance2_subject4 fallAndGetUp1_subject1 --seconds 10 \
+  --output videos/push_ab.mp4
+```
+
+## Extensions (branch `smimic-ext`)
+
+### Push injection and the push test
+
+Training with `env.commands.motion.push_scale=1.0` kicks the root every 1–3 s in the simulator (BeyondMimic's range: ±0.5 m/s in x/y, ±0.2 m/s in z; mjwarp only, exact). Each kick is logged in the replay buffer and added back at the same step of world-model training windows. `algo.imag_push_rate=0.01 algo.imag_push_scale=1.0` also kicks imagined rollouts; rewards use the pre-kick state.
+
+The push test kicks every policy with the same seeded horizontal kicks every `--push_every` steps (default 150 = 3 s) and writes `ckpt_*_eval_push<v>.json`:
+
+```bash
+uv run unisupermimic-eval --ckpt runs/uni_push_s0/ckpt_012000.pt --push_speed 1.0
+```
+
+### PPO-Sim baseline (paper Fig. 4a)
+
+BeyondMimic PPO in the simulator, with the same observations, goal, and critic input as SuperMimic; settings in the `ppo:` section of `config.yaml` (8192 environments per GPU, 18 h, checkpoints every 30 min). Its checkpoints load into `unisupermimic-eval` and `unisupermimic-video`.
+
+```bash
+uv run python -m unisupermimic.scripts.train_ppo training.log_dir=runs/ppo_g1
+```
+
+### Multi-GPU training
+
+Data parallel with one rank per GPU: gradients and normalizer moments are averaged, the learning rate is scaled by √N (Table A.5), and each rank seeds its environments differently. Rank 0 logs and saves.
+
+```bash
+uv run torchrun --standalone --nproc_per_node=2 -m unisupermimic.scripts.train_ddp \
+  training.log_dir=runs/g2        # add --ppo before the overrides for PPO-Sim
+```
+
+### BONES-SEED motion library
+
+Accept the dataset license on Hugging Face (`bones-studio/seed`) and `export HF_TOKEN=...`. Then download, check the detected layout, and build a packed 50 Hz library. The build applies the name filter and the foot-contact feasibility filter of Appendix E:
+
+```bash
+uv run tools/prepare_bones_seed.py download --root data/bones_seed     # ~23.5 GB
+uv run tools/prepare_bones_seed.py inspect  --root data/bones_seed
+uv run tools/prepare_bones_seed.py build    --root data/bones_seed --out data/bones_pack
+uv run unisupermimic-train env.commands.motion.motion_pack=data/bones_pack training.log_dir=runs/bones
+uv run unisupermimic-eval --ckpt runs/bones/ckpt_012000.pt --motion_pack data/bones_pack
+```
+
+Evaluation runs in chunks of `eval.max_envs` clips (default 8192). Without `--motion_pack`, it uses the LAFAN library: evaluation may change the motion library, but nothing else in the training contract.
+
+### Experiment launcher (H100/H200)
+
+`tools/launch.py` queues named experiments over the visible GPUs (strict FIFO, one job per free GPU or GPU group). Each job trains, then evaluates the final checkpoint: nominal plus pushes of 0.5, 1.0, and 1.5 m/s, and the BONES pack for BONES runs. `tools/report_push.py` prints the table, with mean ± std over seeds.
+
+```bash
+uv run tools/launch.py list                       # experiments and groups
+uv run tools/launch.py run push_ab --gpus 0,1     # uni_base_s0 and uni_push_s0, in parallel
+uv run tools/launch.py run push_ab --dry          # print the commands only
+uv run tools/launch.py eval push_ab --curve       # nominal eval of every saved checkpoint
+uv run tools/report_push.py
+```
+
+Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`. On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
 
 ## Results
 

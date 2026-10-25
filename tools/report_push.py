@@ -16,8 +16,12 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
-TESTS = (("nominal", "_eval.json"), ("push 0.5", "_eval_push0.5.json"),
-         ("push 1.0", "_eval_push1.json"), ("push 1.5", "_eval_push1.5.json"))
+TESTS = (
+    ("nominal", "_eval.json"),
+    ("push 0.5", "_eval_push0.5.json"),
+    ("push 1.0", "_eval_push1.json"),
+    ("push 1.5", "_eval_push1.5.json"),
+)
 
 
 def fmt(values: list[float], digits: int) -> str:
@@ -50,7 +54,9 @@ def main() -> None:
             if path.is_file():
                 result = json.loads(path.read_text())
                 table[name][label].append((result["norm_return"], result["n_failed"]))
-    header = "| experiment | seeds | " + " | ".join(f"{label} return | failed" for label, _ in TESTS)
+    header = "| experiment | seeds | " + " | ".join(
+        f"{label} return | failed" for label, _ in TESTS
+    )
     print(header + " |")
     print("|" + "---|" * (2 + 2 * len(TESTS)))
     for name in sorted(table):

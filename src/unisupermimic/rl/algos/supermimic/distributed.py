@@ -29,7 +29,9 @@ def init_from_env() -> None:
     """Join the torchrun process group when launched with WORLD_SIZE > 1."""
     if int(os.environ.get("WORLD_SIZE", "1")) <= 1 or dist.is_initialized():
         return
-    backend = os.environ.get("SUPERMIMIC_DIST_BACKEND") or ("nccl" if torch.cuda.is_available() else "gloo")
+    backend = os.environ.get("SUPERMIMIC_DIST_BACKEND") or (
+        "nccl" if torch.cuda.is_available() else "gloo"
+    )
     dist.init_process_group(backend)
 
 

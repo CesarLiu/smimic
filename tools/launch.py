@@ -38,24 +38,52 @@ PUSH_IMAG = ["algo.imag_push_rate=0.01", "algo.imag_push_scale=1.0"]
 E: dict[str, dict] = {}
 
 
-def experiment(name: str, overrides: list[str], note: str, gpus: int = 1, algo: str = "supermimic") -> None:
-    E[name] = dict(overrides=overrides, note=note, gpus=gpus, algo=algo)
+# BONES-SEED (paper Sec. 5.3): tools/prepare_bones_seed.py download + build writes this pack
+BONES_PACK = "data/bones_pack"
+
+
+def experiment(
+    name: str,
+    overrides: list[str],
+    note: str,
+    gpus: int = 1,
+    algo: str = "supermimic",
+    pack: str | None = None,
+) -> None:
+    """``pack``: train on this motion pack; evaluation then also covers the pack itself."""
+    if pack is not None:
+        overrides = [f"env.commands.motion.motion_pack={ROOT / pack}", *overrides]
+    E[name] = dict(overrides=overrides, note=note, gpus=gpus, algo=algo, pack=pack)
 
 
 for seed in range(3):
     s = [f"algo.seed={seed}"]
     experiment(f"uni_base_s{seed}", s, "default UniSuperMimic (paper config, 12k iterations)")
-    experiment(f"uni_push_s{seed}", s + PUSH_SIM + PUSH_IMAG, "push injection: sim + imagined kicks")
+    experiment(
+        f"uni_push_s{seed}", s + PUSH_SIM + PUSH_IMAG, "push injection: sim + imagined kicks"
+    )
     experiment(f"uni_push_sim_s{seed}", s + PUSH_SIM, "ablation: simulator kicks only")
     experiment(f"uni_push_imag_s{seed}", s + PUSH_IMAG, "ablation: imagined kicks only")
 
 # Paper Fig. 3a-style 2-GPU run (data parallel, lr x sqrt(2) as in Table A.5)
 experiment("uni_base_g2_s0", ["algo.seed=0"], "default config on 2 GPUs (torchrun)", gpus=2)
-experiment("uni_push_g2_s0", ["algo.seed=0"] + PUSH_SIM + PUSH_IMAG, "push injection on 2 GPUs", gpus=2)
+experiment(
+    "uni_push_g2_s0", ["algo.seed=0"] + PUSH_SIM + PUSH_IMAG, "push injection on 2 GPUs", gpus=2
+)
 
 # Fig. 4a: PPO-Sim (BeyondMimic PPO in the simulator, 8192 envs/GPU, 18 h) on 1 / 4 / 8 GPUs
 for n in (1, 4, 8):
     experiment(f"uni_ppo_g{n}", ["algo.seed=0"], f"PPO-Sim on {n} GPU(s), 18 h", gpus=n, algo="ppo")
+
+# BONES-SEED: the same 12k-iteration budget on the full filtered library, on 1 and 2 GPUs
+experiment("uni_bones_s0", ["algo.seed=0"], "BONES-SEED pack, 1 GPU", pack=BONES_PACK)
+experiment("uni_bones_g2_s0", ["algo.seed=0"], "BONES-SEED pack, 2 GPUs", gpus=2, pack=BONES_PACK)
+experiment(
+    "uni_bones_push_s0",
+    ["algo.seed=0"] + PUSH_SIM + PUSH_IMAG,
+    "BONES-SEED pack with push injection, 1 GPU",
+    pack=BONES_PACK,
+)
 
 GROUPS = {
     "push_ab": ["uni_base_s0", "uni_push_s0"],
@@ -63,6 +91,7 @@ GROUPS = {
     "push_seeds": ["uni_base_s1", "uni_push_s1", "uni_base_s2", "uni_push_s2"],
     "multi_gpu": ["uni_base_g2_s0", "uni_push_g2_s0"],
     "ppo": ["uni_ppo_g1", "uni_ppo_g4", "uni_ppo_g8"],
+    "bones": ["uni_bones_s0", "uni_bones_g2_s0"],
 }
 
 
@@ -81,8 +110,15 @@ def train_command(name: str) -> list[str]:
     args = [f"training.log_dir=runs/{name}", *E[name]["overrides"]]
     n, ppo = E[name]["gpus"], E[name]["algo"] == "ppo"
     if n > 1:  # data parallel: one rank per GPU (scripts/train_ddp.py)
-        return [TORCHRUN, "--standalone", f"--nproc_per_node={n}", "-m",
-                "unisupermimic.scripts.train_ddp", *(["--ppo"] if ppo else []), *args]
+        return [
+            TORCHRUN,
+            "--standalone",
+            f"--nproc_per_node={n}",
+            "-m",
+            "unisupermimic.scripts.train_ddp",
+            *(["--ppo"] if ppo else []),
+            *args,
+        ]
     if ppo:
         return [str(BIN / "python"), "-m", "unisupermimic.scripts.train_ppo", *args]
     return [TRAIN, *args]
@@ -103,6 +139,9 @@ def eval_commands(name: str, curve: bool) -> list[list[str]]:
         [EVAL, "--backend", "mjwarp", "--ckpt", str(final), "--push_speed", f"{v:g}"]
         for v in PUSH_SPEEDS
     ]
+    if E[name]["pack"] is not None:  # LAFAN above (held out); the training library below
+        pack = str(ROOT / E[name]["pack"])
+        commands.append([EVAL, "--backend", "mjwarp", "--ckpt", str(final), "--motion_pack", pack])
     return commands
 
 
@@ -115,7 +154,9 @@ def job_script(name: str, mode: str, curve: bool, evaluate: bool) -> str:
         if mode == "run" and curve:
             curve = False  # checkpoints are listed at job start; evaluate the curve separately
         steps += eval_commands(name, curve) if mode == "eval" else eval_commands(name, False)
-    return " && ".join(" ".join(f"'{part}'" if "[" in part else part for part in step) for step in steps)
+    return " && ".join(
+        " ".join(f"'{part}'" if "[" in part else part for part in step) for step in steps
+    )
 
 
 def schedule(names: list[str], gpus: list[int], mode: str, dry: bool, curve: bool, evaluate: bool):
@@ -139,7 +180,9 @@ def schedule(names: list[str], gpus: list[int], mode: str, dry: bool, curve: boo
                 continue
             run_dir = ROOT / "runs" / name
             run_dir.mkdir(parents=True, exist_ok=True)
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=",".join(map(str, use)), MUJOCO_GL="disable")
+            env = dict(
+                os.environ, CUDA_VISIBLE_DEVICES=",".join(map(str, use)), MUJOCO_GL="disable"
+            )
             env.pop("VIRTUAL_ENV", None)
             log = open(run_dir / ("launch.log" if mode == "run" else "launch_eval.log"), "a")
             process = subprocess.Popen(

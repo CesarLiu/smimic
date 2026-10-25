@@ -87,3 +87,41 @@ def test_policy_shape_mismatch_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(CrossBackendIncompatibleError, match="algo.policy_hidden"):
         resolve_sim2sim_config(tmp_path, target, strict=True)
+
+
+def _write_snapshot(run_dir: Path, cfg: DictConfig) -> None:
+    (run_dir / "run_config.json").write_text(
+        json.dumps({"contract_snapshot": extract_contract_snapshot(cfg)}), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("env.commands.motion.motion_pack", "data/bones_pack"),  # absent in the source
+        ("env.commands.motion.motion_files", ["other.csv"]),
+    ],
+)
+def test_motion_library_change_is_allowed_only_for_evaluation(
+    tmp_path: Path, path: str, value: object
+) -> None:
+    _write_snapshot(tmp_path, _cfg())
+    target = _cfg()
+    OmegaConf.update(target, path, value, force_add=True)
+
+    with pytest.raises(CrossBackendIncompatibleError, match=path):
+        resolve_sim2sim_config(tmp_path, target, strict=True)
+    assert (
+        resolve_sim2sim_config(tmp_path, target, strict=True, allow_library_change=True) is target
+    )
+
+
+def test_library_change_does_not_excuse_a_network_change(tmp_path: Path) -> None:
+    _write_snapshot(tmp_path, _cfg())
+    target = _cfg()
+    OmegaConf.update(target, "env.commands.motion.motion_pack", "data/bones_pack", force_add=True)
+    OmegaConf.update(target, "algo.policy_hidden", [512, 256])
+
+    with pytest.raises(CrossBackendIncompatibleError, match="algo.policy_hidden") as error:
+        resolve_sim2sim_config(tmp_path, target, strict=True, allow_library_change=True)
+    assert "motion_pack" not in str(error.value)

@@ -32,6 +32,8 @@ SUPERMIMIC_DENYLIST = [
     "env.commands.motion.motion_pack",
 ]
 DENYLIST = list(dict.fromkeys([*UPSTREAM_DENYLIST, *SUPERMIMIC_DENYLIST]))
+# the motion library shapes no network: evaluation may swap it (allow_library_change)
+MOTION_LIBRARY_FIELDS = ("env.commands.motion.motion_files", "env.commands.motion.motion_pack")
 SNAPSHOT_FIELDS = [*DENYLIST, *WARNING_LIST]
 ENV_STRUCTURAL_DENYLIST = [path for path in DENYLIST if path.startswith("env.")]
 
@@ -146,7 +148,11 @@ def resolve_sim2sim_config(
     *,
     algo_name: str | None = None,
     strict: bool = True,
+    allow_library_change: bool = False,
 ) -> DictConfig | None:
+    """Fail closed when ``target_cfg`` differs from the source run's contract snapshot.
+    ``allow_library_change`` (evaluation on another motion library) only warns about the
+    motion library fields."""
     del algo_name
     if source_run_dir is None:
         return None
@@ -183,6 +189,11 @@ def resolve_sim2sim_config(
             if target_value is not None:
                 denials.append(_asymmetric_line(path, target_value, source_present=False))
 
+    if allow_library_change:
+        library = [line for line in denials if line.startswith(MOTION_LIBRARY_FIELDS)]
+        for line in library:
+            print(f"[sim2sim] evaluating on another motion library: {line.split(';')[0]}")
+        denials = [line for line in denials if line not in library]
     if denials:
         message = f"SuperMimic sim2sim contract mismatch.\nSource run: {run_dir}\n  " + "\n  ".join(
             denials
@@ -196,6 +207,7 @@ def resolve_sim2sim_config(
 __all__ = [
     "DENYLIST",
     "ENV_STRUCTURAL_DENYLIST",
+    "MOTION_LIBRARY_FIELDS",
     "SNAPSHOT_FIELDS",
     "SUPERMIMIC_DENYLIST",
     "extract_contract_snapshot",

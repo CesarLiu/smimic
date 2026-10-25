@@ -114,7 +114,7 @@ uv run unisupermimic-train \
 
 ## 评估
 
-评估为每段运动创建一个环境，从首帧开始，关闭观测/动作噪声，跑完整个 clip。严格 sim2sim 校验会在环境构造前检查策略 I/O、网络形状、运动库和 MJCF 身份。
+评估为每段运动创建一个环境，从首帧开始，关闭观测/动作噪声，跑完整个 clip。严格 sim2sim 校验会在环境构造前检查策略 I/O、网络形状和 MJCF 身份。评估时可以换用其他运动库（`--motion_pack`），只有运动库允许不同。
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 uv run unisupermimic-train \
@@ -146,6 +146,86 @@ CUDA_VISIBLE_DEVICES=0 MUJOCO_GL=egl uv run unisupermimic-video \
 ```
 
 默认将参考动作的 root XY 对齐策略，便于观察全身跟踪；传入 `--global-ghost` 可保留参考动作的全局位移。
+
+可同时传入多个 checkpoint，并排渲染：每个 checkpoint 一个画面，显示实时得分，摔倒后出现红色横幅。传入多个片段时，每个片段输出一个 `<output 文件名>_<片段>.mp4`。`--push_speed` 可回放推力测试（需要 mjwarp）。回放直接使用确定性评测的循环。如不想占用 GPU，可用 CPU 上的 MuJoCo 后端渲染。没有 EGL 驱动的机器，首次执行 `tools/softgl.sh` 时会自动安装 Mesa 软件 OpenGL：
+
+```bash
+source tools/softgl.sh
+CUDA_VISIBLE_DEVICES= uv run unisupermimic-video --backend mujoco \
+  --ckpt runs/uni_base_s0/ckpt_012000.pt runs/uni_push_s0/ckpt_012000.pt \
+  --labels baseline "push injection" \
+  --clip dance2_subject4 fallAndGetUp1_subject1 --seconds 10 \
+  --output videos/push_ab.mp4
+```
+
+## 扩展（`smimic-ext` 分支）
+
+### 推力注入与推力测试
+
+训练时加 `env.commands.motion.push_scale=1.0`，仿真器每 1–3 秒给 root 一次速度冲量。范围取 BeyondMimic 的设置：x/y ±0.5 m/s，z ±0.2 m/s。只支持 mjwarp，注入是精确的。每次冲量都记录在 replay 中，世界模型训练窗口会在同一步把它加回去。再加 `algo.imag_push_rate=0.01 algo.imag_push_scale=1.0`，想象 rollout 中也会施加冲量；奖励按施加冲量前的状态计算。
+
+推力测试每隔 `--push_every` 步（默认 150 步，即 3 秒）施加一次水平冲量。随机种子固定，所有策略受到的冲量完全相同。结果写入 `ckpt_*_eval_push<v>.json`：
+
+```bash
+uv run unisupermimic-eval --ckpt runs/uni_push_s0/ckpt_012000.pt --push_speed 1.0
+```
+
+### PPO-Sim 基线（论文图 4a）
+
+在仿真器中运行 BeyondMimic 的 PPO，观测、目标和 critic 输入都与 SuperMimic 相同。配置见 `config.yaml` 的 `ppo:` 一节：每 GPU 8192 个环境，训练 18 小时，每 30 分钟保存一次 checkpoint。保存的 checkpoint 可直接用于 `unisupermimic-eval` 和 `unisupermimic-video`。
+
+```bash
+uv run python -m unisupermimic.scripts.train_ppo training.log_dir=runs/ppo_g1
+```
+
+### 多 GPU 训练
+
+数据并行，每块 GPU 一个 rank：
+- 梯度和归一化统计量在各 rank 间取平均；
+- 学习率乘以 √N（表 A.5）；
+- 每个 rank 的环境使用不同的种子；
+- 只有 rank 0 写日志和保存 checkpoint。
+
+```bash
+uv run torchrun --standalone --nproc_per_node=2 -m unisupermimic.scripts.train_ddp \
+  training.log_dir=runs/g2        # PPO-Sim 在参数前加 --ppo
+```
+
+### BONES-SEED 动作库
+
+先在 Hugging Face 上接受数据集许可（`bones-studio/seed`），并 `export HF_TOKEN=...`。然后依次下载数据、检查自动识别的数据格式、生成 50 Hz 的打包动作库。生成时会按附录 E 应用名称过滤和脚部接触可行性过滤：
+
+```bash
+uv run tools/prepare_bones_seed.py download --root data/bones_seed     # 约 23.5 GB
+uv run tools/prepare_bones_seed.py inspect  --root data/bones_seed
+uv run tools/prepare_bones_seed.py build    --root data/bones_seed --out data/bones_pack
+uv run unisupermimic-train env.commands.motion.motion_pack=data/bones_pack training.log_dir=runs/bones
+uv run unisupermimic-eval --ckpt runs/bones/ckpt_012000.pt --motion_pack data/bones_pack
+```
+
+评测按每块 `eval.max_envs` 个片段分块进行（默认 8192）。不加 `--motion_pack` 时在 LAFAN 上评测。评测时可以更换动作库，但训练配置中的其他部分都不能改。
+
+### 实验启动器（H100/H200）
+
+`tools/launch.py` 把命名好的实验按可见 GPU 排队：严格先进先出，每块（或每组）空闲 GPU 跑一个任务。每个任务训练完成后评测最终 checkpoint，包括常规评测和 0.5、1.0、1.5 m/s 三档推力；BONES 实验还会在 BONES 动作库上评测。`tools/report_push.py` 汇总结果表，多个种子时给出均值 ± 标准差。
+
+```bash
+uv run tools/launch.py list                       # 列出实验和分组
+uv run tools/launch.py run push_ab --gpus 0,1     # uni_base_s0 与 uni_push_s0 并行
+uv run tools/launch.py run push_ab --dry          # 只打印命令
+uv run tools/launch.py eval push_ab --curve       # 对每个已保存的 checkpoint 做常规评测
+uv run tools/report_push.py
+```
+
+分组：
+- `push_ab`：基线 vs 推力注入；
+- `push_ablation`：只有仿真器冲量 / 只有想象冲量；
+- `push_seeds`：更多种子；
+- `multi_gpu`；
+- `ppo`：1/4/8 GPU；
+- `bones`。
+
+在单块 L4 上，默认的 12k 迭代训练约需 5 小时，四次评测约需 1.4 小时。
 
 ## 结果
 

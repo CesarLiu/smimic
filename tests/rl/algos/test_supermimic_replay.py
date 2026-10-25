@@ -37,9 +37,7 @@ def _transition(
 def test_replay_storage_shapes_and_dtypes() -> None:
     buffer = ReplayBuffer(4, 2, "cpu", num_joints=3, context_dim=4)
 
-    assert set(buffer.data) == {
-        "s", "s1", "a", "a_prev", "xi", "r", "f", "ep_step", "done", "push"
-    }
+    assert set(buffer.data) == {"s", "s1", "a", "a_prev", "xi", "r", "f", "ep_step", "done", "push"}
     assert buffer.data["push"].shape == (4, 2, 6)
     assert buffer.data["push"].dtype == torch.float32
     assert buffer.data["s"].shape == (4, 2, 19)

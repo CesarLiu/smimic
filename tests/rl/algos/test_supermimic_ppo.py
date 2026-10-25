@@ -10,9 +10,18 @@ from unisupermimic.rl.algos.supermimic.ppo import PPOConfig, PPOLearner
 
 def _config(**overrides) -> PPOConfig:
     base = dict(
-        policy_hidden=(8,), critic_hidden=(8,), hist=2, goal_frames=2, amp="none",
-        steps_per_env=4, epochs=2, minibatches=2, iterations=2, max_hours=1.0,
-        ckpt_minutes=1e9, log_every=1,
+        policy_hidden=(8,),
+        critic_hidden=(8,),
+        hist=2,
+        goal_frames=2,
+        amp="none",
+        steps_per_env=4,
+        epochs=2,
+        minibatches=2,
+        iterations=2,
+        max_hours=1.0,
+        ckpt_minutes=1e9,
+        log_every=1,
     )
     base.update(overrides)
     return PPOConfig(**base)

@@ -9,6 +9,7 @@ import math
 import os
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -89,7 +90,9 @@ def evaluate(
     returns = torch.zeros(num_clips, device=env.device)
     steps = torch.zeros(num_clips, dtype=torch.int64, device=env.device)
     failed = torch.zeros(num_clips, dtype=torch.bool, device=env.device)
-    generator = torch.Generator(device=env.device).manual_seed(push_seed) if push_speed > 0 else None
+    generator = (
+        torch.Generator(device=env.device).manual_seed(push_seed) if push_speed > 0 else None
+    )
     # clips are played in chunks of env.num_envs (one environment per clip within a chunk);
     # the push generator carries over between chunks, so kicks stay identical across policies
     for first in range(0, num_clips, env.num_envs):
@@ -129,9 +132,12 @@ def _evaluate_chunk(
     push_speed: float,
     push_every: int,
     generator: torch.Generator | None,
+    on_step: Callable[[dict[str, torch.Tensor], torch.Tensor], None] | None = None,
+    max_steps: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Play ``clip_ids`` (at most env.num_envs) once from their first frames; spare
-    environments replay the last clip and are ignored."""
+    environments replay the last clip and are ignored. ``on_step(transition, alive)`` sees
+    every step (video rendering records the rollout through it); ``max_steps`` stops early."""
     motion = mdp.motion
     n, k = env.num_envs, clip_ids.numel()
     padded = torch.cat((clip_ids, clip_ids[-1:].expand(n - k)))
@@ -143,7 +149,7 @@ def _evaluate_chunk(
     failed = torch.zeros(n, dtype=torch.bool, device=env.device)
     history = None
     t = 0
-    while not bool(finished.all()):
+    while not bool(finished.all()) and (max_steps is None or t < max_steps):
         if push_speed > 0 and t > 0 and t % push_every == 0:
             angle = 2 * math.pi * torch.rand(n, device=env.device, generator=generator)
             push = torch.zeros((n, 6), device=env.device)
@@ -166,6 +172,8 @@ def _evaluate_chunk(
         transition = state.info[SUPERMIMIC_TRANSITION_KEY]
 
         alive = ~finished
+        if on_step is not None:
+            on_step(transition, alive)
         returns += torch.where(alive, transition["r"], torch.zeros_like(transition["r"]))
         steps += alive
         failed |= alive & transition["term"]
@@ -315,8 +323,13 @@ def _structural_overrides(run_dir: Path) -> list[str]:
 
 
 def make_eval_env(
-    run_dir: Path, backend: str = "mjwarp", max_envs: int | None = None
+    run_dir: Path,
+    backend: str = "mjwarp",
+    max_envs: int | None = None,
+    motion_pack: str | Path | None = None,
 ) -> SuperMimicManagerBasedRlEnv:
+    """Evaluation environment of ``run_dir``'s structural config on the default LAFAN library,
+    or on a packed library (``motion_pack``, see tools/prepare_bones_seed.py)."""
     from hydra import compose, initialize_config_dir
     from unilab.base.config_adapter import create_env
     from unilab.base.process_device import configure_backend_process_device
@@ -333,6 +346,11 @@ def make_eval_env(
         f"task=g1_super_mimic/{backend}",
         *_structural_overrides(run_dir),
         *([f"eval.max_envs={max_envs}"] if max_envs else []),
+        *(
+            [f"env.commands.motion.motion_pack={Path(motion_pack).resolve()}"]
+            if motion_pack
+            else []
+        ),
     ]
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir)):
         cfg = compose(config_name="config", overrides=overrides)
@@ -342,6 +360,7 @@ def make_eval_env(
         cfg,
         algo_name="supermimic",
         strict=bool(cfg.training.sim2sim_strict),
+        allow_library_change=True,
     )
     device = get_default_device()
     bound_device = configure_backend_process_device(str(cfg.training.sim_backend), device)
@@ -371,8 +390,19 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--push_speed", type=float, default=0.0, help="m/s; 0 = no pushes")
     parser.add_argument("--push_every", type=int, default=150, help="steps between pushes")
     parser.add_argument("--push_seed", type=int, default=0)
-    parser.add_argument("--max_envs", type=int, default=None,
-                        help="evaluate in chunks of this many clips (default: eval.max_envs)")
+    parser.add_argument(
+        "--max_envs",
+        type=int,
+        default=None,
+        help="evaluate in chunks of this many clips (default: eval.max_envs)",
+    )
+    parser.add_argument(
+        "--motion_pack",
+        type=Path,
+        default=None,
+        help="evaluate on this motion pack instead of LAFAN; "
+        "writes <ckpt>_eval_<pack name>[_push<v>].json",
+    )
     return parser
 
 
@@ -383,7 +413,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.ckpt is None and args.run_dir is None:
         _argument_parser().error("one of --run_dir or --ckpt is required")
     run_dir = args.ckpt.parent if args.ckpt is not None else args.run_dir
-    env = make_eval_env(run_dir, backend=args.backend, max_envs=args.max_envs)
+    env = make_eval_env(
+        run_dir, backend=args.backend, max_envs=args.max_envs, motion_pack=args.motion_pack
+    )
     try:
         if args.ckpt is not None:
             device = torch.device(env.device)
@@ -401,7 +433,8 @@ def main(argv: list[str] | None = None) -> None:
                     push_every=args.push_every,
                     push_seed=args.push_seed,
                 )
-            suffix = f"_eval_push{args.push_speed:g}" if args.push_speed > 0 else "_eval"
+            suffix = "_eval" + (f"_{args.motion_pack.name}" if args.motion_pack else "")
+            suffix += f"_push{args.push_speed:g}" if args.push_speed > 0 else ""
             _atomic_write_json(args.ckpt.with_name(f"{args.ckpt.stem}{suffix}.json"), result)
             print(
                 json.dumps(

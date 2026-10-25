@@ -18,3 +18,4 @@ outputs/
 *.pt
 src/unisupermimic/assets/robots/g1/assets/
 src/unisupermimic/assets/motions/
+tools/.softgl/

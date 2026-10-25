@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import torch
+from test_supermimic_learner import FakeEnv, _config  # same directory (tests are not a package)
 
 from unisupermimic.rl.algos.supermimic.geometry import (
     PUSH_RANGE,
@@ -15,8 +16,6 @@ from unisupermimic.rl.algos.supermimic.geometry import (
 )
 from unisupermimic.rl.algos.supermimic.learner import SuperMimicLearner
 from unisupermimic.rl.algos.supermimic.replay import ReplayBuffer
-
-from test_supermimic_learner import FakeEnv, _config  # same directory (tests are not a package)
 
 
 def _random_state(batch: int, num_joints: int = 2):
@@ -66,7 +65,9 @@ def test_replay_defaults_push_to_zero_and_windows_align_it() -> None:
     assert torch.equal(buffer.data["push"][0::2], torch.zeros(4, 1, 6))
     window = buffer.sample_windows(16, 3)
     start = window["s"][:, :, 0].long()  # s encodes the time index
-    expected = torch.where(start % 2 == 1, start.float(), torch.zeros_like(start, dtype=torch.float))
+    expected = torch.where(
+        start % 2 == 1, start.float(), torch.zeros_like(start, dtype=torch.float)
+    )
     torch.testing.assert_close(window["push"][..., 0], expected)
 
 
