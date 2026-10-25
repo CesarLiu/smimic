@@ -90,6 +90,11 @@ class RobotView:
         self.foot_offset = torch.tensor(FOOT_SITE_OFFSET, device=device)
         self.head_offset = torch.tensor(HEAD_SITE_OFFSET, device=device)
 
+    @property
+    def data(self) -> RobotView:
+        """mjlab's ``entity.data`` spelling (go2-supermimic viz.status_lines reads it)."""
+        return self
+
     def _plan(self) -> Any:
         plan = self._env.scene.read_plan
         if plan is None:

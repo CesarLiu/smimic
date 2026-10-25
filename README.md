@@ -221,18 +221,40 @@ uv run unisupermimic-train training.log_dir=runs/driven \
 
 ### Go2 chase / dodge (go2-supermimic on UniLab)
 
-[go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) trains a Unitree Go2 to chase a fleeing ball while dodging thrown balls and bars, with its own SuperMimic variant (70-dim yaw-frame world-model state with limb points, analytic chase/dodge rewards in imagination). Its algorithm and target dynamics are vendored under `unisupermimic.go2chase` (MIT); the environment is rewritten for UniLab (`go2chase/env`, task `Go2ChaseFlat`, mjwarp or mujoco). Flat ground only so far: static obstacles (mocap boxes, LiDAR) and generated terrain (height scan, terrain driver) are not ported yet.
+[go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) trains a Unitree Go2 to chase a fleeing ball while dodging thrown balls and bars, with its own SuperMimic variant (70-dim yaw-frame world-model state with limb points, analytic chase/dodge rewards in imagination). Its algorithm and target dynamics are vendored under `unisupermimic.go2chase` (MIT); the environment is rewritten for UniLab (`go2chase/env`) with all three of its tasks: `Go2ChaseFlat`, `Go2ChaseObstacles` (tall boxes, pillars and walls placed per episode, 16-ray LiDAR) and `Go2ChaseTerrain` (stairs up and down, box grids, rough ground, slopes in five difficulty rows, 11 x 7 height scan), on mjwarp or mujoco.
 
-The port is checked against go2-supermimic's own mjlab environment: its pretrained `weights/flat.pt` scores the same there and here (chase + dodge, 256 envs, 60 s: 33.5 vs 32.5 tags/min, ball hit rates 0.21-0.25 vs 0.23-0.27, falls 0.004 vs 0.008 per minute), and the actor observation rebuilt from the world-model state equals the env's exactly. Actuators are MuJoCo position actuators with go2's gains and torque limits; mjlab's DC-motor torque-speed curve and 0-2 substep command delay are not modelled (removing them in mjlab leaves the metrics unchanged).
+The port is checked against go2-supermimic's own mjlab environment with its pretrained policies (256 envs, 60 s, hardest curriculum setting; mjlab with MuJoCo position actuators, which the port uses):
+
+| task | metric | mjlab | UniLab port |
+|---|---|---:|---:|
+| flat (chase + dodge) | tags / min | 33.3 | 33.5 |
+| | ball / low bar / high bar hit rate | 0.20-0.25 / 0.07 / 0.01 | 0.21-0.25 / 0.07 / 0.01 |
+| | falls / min | 0.004 | 0.004 |
+| obstacles (chase + dodge) | tags / min | 31.8 | 31.1 |
+| | ball / low bar / high bar hit rate | 0.13-0.18 / 0.06 / 0.00 | 0.12-0.17 / 0.06 / 0.01 |
+| | obstacle contact (time), falls / min | 0.006, 0.043 | 0.006, 0.031 |
+| terrain (its mode mix) | tags / min | 26.6 | 26.7 |
+| | low bar / high bar hit rate | 0.09 / 0.06 | 0.07 / 0.06 |
+| | falls / min | 0.555 | 0.559 |
+
+Details:
+
+- Robot: the MJCF mjlab simulates, exported and compared field by field. Actuators are MuJoCo position actuators with go2's gains and torque limits; mjlab's DC-motor torque-speed curve and 0-2 substep command delay are not modelled (UniLab has no per-substep action hook). On flat ground and among obstacles that changes nothing measurable; on terrain mjlab's DC-motor actuators give the pretrained policy more falls (0.80 vs 0.56 per minute) and low-bar hits (0.11 vs 0.09), so there the port matches mjlab with position actuators, a little easier than go2's training actuators.
+- Obstacles are 1e6 kg boxes on planar joints with high damping, placed through their joint positions: UniLab's mjwarp resets do not support mocap bodies. mujoco_warp 3.11 needs `mjwarp_nconmax: 128` there (its convex-collision buffer overflows without a bounds check at 64).
+- Terrain: go2-supermimic's generated terrain (mjlab generator, fixed seed) exported once to `assets/robots/go2/terrain_go2_chase.{xml,json}` by `tools/export_go2_terrain.py`; tiles are assigned as mjlab does and harder rows open with training progress. Its height field is ray-cast once on first use (about 4 minutes on 8 cores) and cached in `~/.cache/unisupermimic/heightfields`.
+- The actor observation rebuilt from the world-model state in imagination equals the env's exactly.
 
 ```bash
-uv run tools/prepare_go2_assets.py                 # Menagerie Go2 meshes (gitignored)
-uv run unisupermimic-go2-train --run-name flat     # go2 TrainCfg flags; runs/go2chase/<stamp>_flat
-uv run unisupermimic-go2-eval --checkpoint runs/go2chase/<run>/model_40000.pt --mode both
-uv run tools/launch.py run go2_robot --gpus 0,1    # go2_flat_s0/s1, 40k iterations + evaluation
+uv run tools/prepare_go2_assets.py --driver        # Menagerie meshes + the terrain-walking driver (gitignored)
+uv run unisupermimic-go2-train --task Go2-Chase-Flat --run-name flat      # go2 TrainCfg flags
+uv run unisupermimic-go2-eval --checkpoint runs/go2chase/<run>/model_40000.pt --task flat --mode both
+source tools/softgl.sh                             # headless video
+uv run unisupermimic-go2-video --checkpoint <model.pt> --task terrain --mode task --terrain stairs
+uv run tools/launch.py run go2_robot --gpus 0,1           # flat from scratch, 2 seeds, 40k iterations
+uv run tools/launch.py run go2_robot_stage2 --gpus 0,1    # then obstacles and terrain from go2_flat_s0
 ```
 
-On one L4 a full-size run (4096 envs) takes about 1.1 s per iteration and 17 GB.
+The second stage follows go2-supermimic's own recipes: obstacles warm-started from the flat policy (10k iterations), terrain warm-started from it with the MoE-CTS terrain-walking policy and the flat policy each driving 10% of the envs to collect world-model data (12k iterations). On one L4 a full-size flat run (4096 envs) takes about 1.1 s per iteration and 17 GB.
 
 ### Experiment launcher (H100/H200)
 
@@ -246,7 +268,7 @@ uv run tools/launch.py eval push_ab --curve       # nominal eval of every saved 
 uv run tools/report_push.py
 ```
 
-Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`, `go2` (training techniques from go2-supermimic), `go2_robot` (Go2 chase / dodge). On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
+Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`, `go2` (training techniques from go2-supermimic), `go2_robot` and `go2_robot_stage2` (Go2 chase / dodge). On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
 
 ## Results
 

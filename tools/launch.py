@@ -30,6 +30,12 @@ EVAL = str(BIN / "unisupermimic-eval")
 GO2_TRAIN = str(BIN / "unisupermimic-go2-train")
 GO2_EVAL = str(BIN / "unisupermimic-go2-eval")
 GO2_ITERATIONS = 40_000  # go2-supermimic TrainCfg default
+GO2_TASKS = {
+    "flat": "Go2-Chase-Flat",
+    "obstacles": "Go2-Chase-Obstacles",
+    "terrain": "Go2-Chase-Terrain",
+}
+GO2_DRIVER = "src/unisupermimic/assets/robots/go2/driver/policy.pt"
 PUSH_SPEEDS = (0.5, 1.0, 1.5)  # m/s horizontal kicks every 3 s (see evaluate.evaluate)
 FINAL_ITERATION = 12000  # the default algo.iterations
 
@@ -61,11 +67,22 @@ def experiment(
     gpus: int = 1,
     algo: str = "supermimic",
     pack: str | None = None,
+    go2_task: str = "flat",
+    iterations: int | None = None,
 ) -> None:
-    """``pack``: train on this motion pack; evaluation then also covers the pack itself."""
+    """``pack``: train on this motion pack; evaluation then also covers the pack itself.
+    ``go2_task`` / ``iterations``: Go2 chase experiments (algo="go2")."""
     if pack is not None:
         overrides = [f"env.commands.motion.motion_pack={ROOT / pack}", *overrides]
-    E[name] = dict(overrides=overrides, note=note, gpus=gpus, algo=algo, pack=pack)
+    E[name] = dict(
+        overrides=overrides,
+        note=note,
+        gpus=gpus,
+        algo=algo,
+        pack=pack,
+        go2_task=go2_task,
+        iterations=iterations,
+    )
 
 
 for seed in range(3):
@@ -101,6 +118,37 @@ experiment(
 # Overrides are go2 TrainCfg flags; evaluation: chase + dodge and chase only, hardest setting.
 for seed in range(2):
     experiment(f"go2_flat_s{seed}", [f"--seed={seed}"], "Go2 chase/dodge, flat, 40k it", algo="go2")
+# Second stage, as go2-supermimic trained its releases: warm-started from go2_flat_s0 (run
+# go2_robot first). Obstacles: ~8k iterations from the flat policy. Terrain: its final-stage
+# command (terrain-walking and flat-expert drivers collecting world-model data, smaller actor
+# steps); the MoE-CTS driver comes from tools/prepare_go2_assets.py --driver.
+GO2_FLAT_FINAL = f"runs/go2_flat_s0/model_{GO2_ITERATIONS}.pt"
+experiment(
+    "go2_obstacles_s0",
+    ["--seed=0", f"--resume={GO2_FLAT_FINAL}"],
+    "Go2 obstacles, from go2_flat_s0, 10k it",
+    algo="go2",
+    go2_task="obstacles",
+    iterations=10_000,
+)
+experiment(
+    "go2_terrain_s0",
+    [
+        "--seed=0",
+        f"--resume={GO2_FLAT_FINAL}",
+        f"--driver-policy={GO2_DRIVER}",
+        "--driver-frac=0.1",
+        f"--expert-policy={GO2_FLAT_FINAL}",
+        "--expert-frac=0.1",
+        "--wm-updates=4",
+        "--actor-lr-scale=0.3",
+        "--warmup-iterations=1000",
+    ],
+    "Go2 terrain, from go2_flat_s0, drivers, 12k it",
+    algo="go2",
+    go2_task="terrain",
+    iterations=12_000,
+)
 
 # go2-supermimic techniques on G1 tracking: each alone and all together (compare with uni_base)
 experiment("uni_rare_s0", ["algo.seed=0"] + RARE, "rare-event world-model batches")
@@ -117,6 +165,7 @@ GROUPS = {
     "bones": ["uni_bones_s0", "uni_bones_g2_s0"],
     "go2": ["uni_rare_s0", "uni_explore_s0", "uni_stable_s0", "uni_go2_all_s0"],
     "go2_robot": ["go2_flat_s0", "go2_flat_s1"],
+    "go2_robot_stage2": ["go2_obstacles_s0", "go2_terrain_s0"],
 }
 
 
@@ -136,7 +185,8 @@ def train_command(name: str) -> list[str]:
         return [
             GO2_TRAIN,
             f"--log-dir=runs/{name}",
-            f"--iterations={GO2_ITERATIONS}",
+            f"--task={GO2_TASKS[E[name]['go2_task']]}",
+            f"--iterations={E[name]['iterations'] or GO2_ITERATIONS}",
             *E[name]["overrides"],
         ]
     args = [f"training.log_dir=runs/{name}", *E[name]["overrides"]]
@@ -159,18 +209,22 @@ def train_command(name: str) -> list[str]:
 def eval_commands(name: str, curve: bool) -> list[list[str]]:
     run = ROOT / "runs" / name
     if E[name]["algo"] == "go2":
-        final = run / f"model_{GO2_ITERATIONS}.pt"
+        task = E[name]["go2_task"]
+        final = run / f"model_{E[name]['iterations'] or GO2_ITERATIONS}.pt"
+        modes = ("task", "chase") if task == "terrain" else ("both", "chase")  # terrain: its mix
         return [
             [
                 GO2_EVAL,
                 "--checkpoint",
                 str(final),
+                "--task",
+                task,
                 "--mode",
                 mode,
                 "--json",
-                str(run / f"model_{GO2_ITERATIONS}_eval_{mode}.json"),
+                str(final.with_name(f"{final.stem}_eval_{mode}.json")),
             ]
-            for mode in ("both", "chase")
+            for mode in modes
         ]
     if curve:
         ckpts = sorted(run.glob("ckpt_*.pt"))

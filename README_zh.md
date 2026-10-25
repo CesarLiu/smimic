@@ -225,25 +225,46 @@ uv run unisupermimic-train training.log_dir=runs/driven \
 
 ### Go2 追逐与躲避（go2-supermimic 移植到 UniLab）
 
-[go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) 训练 Unitree Go2 追逐逃跑的球，同时躲避扔来的球和横杆。它有自己的 SuperMimic 变体：世界模型状态是 yaw 坐标系下的 70 维向量，包含腿部各点位置；想象 rollout 中用解析的追逐 / 躲避奖励。算法和目标动力学原样拷贝在 `unisupermimic.go2chase` 下（MIT 许可），环境为 UniLab 重写（`go2chase/env`，任务名 `Go2ChaseFlat`，支持 mjwarp 和 mujoco 后端）。目前只移植了平地：静态障碍物（mocap 方块、LiDAR）和生成地形（高度扫描、地形 driver）还没有移植。
+[go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) 训练 Unitree Go2 追逐逃跑的球，同时躲避扔来的球和横杆。它有自己的 SuperMimic 变体：世界模型状态是 yaw 坐标系下的 70 维向量，包含腿部各点位置；想象 rollout 中用解析的追逐 / 躲避奖励。算法和目标动力学原样拷贝在 `unisupermimic.go2chase` 下（MIT 许可），环境为 UniLab 重写（`go2chase/env`），三个任务都已移植，支持 mjwarp 和 mujoco 后端：
+- `Go2ChaseFlat`：平地；
+- `Go2ChaseObstacles`：每回合摆放的高箱子、柱子和墙，加 16 线 LiDAR；
+- `Go2ChaseTerrain`：上下楼梯、方块格、粗糙地面和斜坡，共 5 行难度，加 11 × 7 的高度扫描。
 
-移植结果已与 go2-supermimic 自己的 mjlab 环境对照验证：
-- 预训练策略 `weights/flat.pt` 在两边得分一致。追逐加躲避模式，256 个环境、60 秒：
-  - 每分钟追到 33.5 次，原版 32.5 次；
-  - 球的命中率 0.21–0.25，原版 0.23–0.27；
-  - 每分钟摔倒 0.004 次，原版 0.008 次。
-- 从世界模型状态重建的 actor 观测与环境给出的完全相同。
+移植结果已与 go2-supermimic 自己的 mjlab 环境对照，用它发布的预训练策略评测（256 个环境、60 秒、课程最难设置；mjlab 一侧用 MuJoCo 位置执行器，与移植版相同）：
 
-执行器用 MuJoCo 位置执行器，增益和力矩上限与 go2 相同；mjlab 的直流电机力矩-速度曲线和 0–2 个物理子步的指令延迟没有建模（在 mjlab 里去掉这两项，指标不变）。
+| 任务 | 指标 | mjlab | UniLab 移植版 |
+|---|---|---:|---:|
+| 平地（追逐加躲避） | 每分钟追到次数 | 33.3 | 33.5 |
+| | 球 / 低杆 / 高杆命中率 | 0.20–0.25 / 0.07 / 0.01 | 0.21–0.25 / 0.07 / 0.01 |
+| | 每分钟摔倒次数 | 0.004 | 0.004 |
+| 障碍物（追逐加躲避） | 每分钟追到次数 | 31.8 | 31.1 |
+| | 球 / 低杆 / 高杆命中率 | 0.13–0.18 / 0.06 / 0.00 | 0.12–0.17 / 0.06 / 0.01 |
+| | 碰到障碍物的时间比例、每分钟摔倒次数 | 0.006、0.043 | 0.006、0.031 |
+| 地形（任务自己的模式比例） | 每分钟追到次数 | 26.6 | 26.7 |
+| | 低杆 / 高杆命中率 | 0.09 / 0.06 | 0.07 / 0.06 |
+| | 每分钟摔倒次数 | 0.555 | 0.559 |
+
+细节：
+- **机器人：** 用 mjlab 实际仿真的 MJCF 导出后逐项核对。执行器用 MuJoCo 位置执行器，增益和力矩上限与 go2 相同；mjlab 的直流电机力矩-速度曲线和 0–2 个物理子步的指令延迟没有建模（UniLab 没有每个子步的动作接口）。平地和障碍物任务上这没有可测的影响；但在地形上，mjlab 的直流电机执行器会让预训练策略摔得更多（每分钟 0.80 次 vs 0.56 次），低杆命中率也更高（0.11 vs 0.09）。所以在地形上，移植版对应的是 mjlab 用位置执行器的结果，比 go2 训练时的执行器略容易。
+- **障碍物：** 用 1e6 kg、带大阻尼的平面关节方块实现，靠写关节位置来摆放，因为 UniLab 的 mjwarp reset 不支持 mocap 物体。另外 mujoco_warp 3.11 在这个场景需要 `mjwarp_nconmax: 128`：设为 64 时，凸体碰撞缓冲区会溢出，而且没有越界检查。
+- **地形：** go2 的生成地形（mjlab 生成器，固定随机种子）由 `tools/export_go2_terrain.py` 一次性导出到 `assets/robots/go2/terrain_go2_chase.{xml,json}`。地块分配方式与 mjlab 相同，更难的行随训练进度开放。高度场在第一次使用时射线投射生成（8 核约 4 分钟），缓存在 `~/.cache/unisupermimic/heightfields`。
+- **观测一致：** 想象 rollout 中从世界模型状态重建的 actor 观测，与环境给出的完全相同。
 
 ```bash
-uv run tools/prepare_go2_assets.py                 # 下载 Menagerie 的 Go2 网格（不进 git）
-uv run unisupermimic-go2-train --run-name flat     # 参数同 go2 的 TrainCfg；输出到 runs/go2chase/<时间戳>_flat
-uv run unisupermimic-go2-eval --checkpoint runs/go2chase/<run>/model_40000.pt --mode both
-uv run tools/launch.py run go2_robot --gpus 0,1    # go2_flat_s0/s1，4 万次迭代并评测
+uv run tools/prepare_go2_assets.py --driver        # Menagerie 网格和地形行走 driver（不进 git）
+uv run unisupermimic-go2-train --task Go2-Chase-Flat --run-name flat      # 参数同 go2 的 TrainCfg
+uv run unisupermimic-go2-eval --checkpoint runs/go2chase/<run>/model_40000.pt --task flat --mode both
+source tools/softgl.sh                             # 无显示器时渲染视频
+uv run unisupermimic-go2-video --checkpoint <model.pt> --task terrain --mode task --terrain stairs
+uv run tools/launch.py run go2_robot --gpus 0,1           # 平地从零训练，2 个种子，4 万次迭代
+uv run tools/launch.py run go2_robot_stage2 --gpus 0,1    # 之后从 go2_flat_s0 训练障碍物和地形
 ```
 
-在单块 L4 上，全尺寸训练（4096 个环境）约 1.1 秒一次迭代，显存约 17 GB。
+第二阶段沿用 go2-supermimic 自己的训练方式：
+- **障碍物：** 从平地策略热启动，训练 1 万次迭代。
+- **地形：** 同样从平地策略热启动，训练 1.2 万次迭代。期间 MoE-CTS 地形行走策略和平地策略各控制 10% 的环境，为世界模型采集数据。
+
+在单块 L4 上，平地全尺寸训练（4096 个环境）约 1.1 秒一次迭代，显存约 17 GB。
 
 ### 实验启动器（H100/H200）
 
@@ -265,7 +286,7 @@ uv run tools/report_push.py
 - `ppo`：1/4/8 GPU；
 - `bones`；
 - `go2`：来自 go2-supermimic 的训练技巧；
-- `go2_robot`：Go2 追逐与躲避。
+- `go2_robot`、`go2_robot_stage2`：Go2 追逐与躲避（先平地，再障碍物和地形）。
 
 在单块 L4 上，默认的 12k 迭代训练约需 5 小时，四次评测约需 1.4 小时。
 

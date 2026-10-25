@@ -15,11 +15,10 @@ history is rebuilt here for all envs.
 from __future__ import annotations
 
 import math
-import re
 
 import torch
 
-from unisupermimic.go2chase.robot.go2 import GO2_ACTION_SCALE
+from unisupermimic.go2chase.env.robot import JOINT_NAMES, action_scale
 
 # go2_rl_lab joint order (leg by leg) and default pose; actions are offsets from
 # it scaled by 0.25.
@@ -43,16 +42,13 @@ class MoeCtsDriver:
     """Velocity-command policy for the scene's robot, batched over envs."""
 
     def __init__(self, env, path: str):
-        self.robot = env.scene["robot"]
+        self.robot = env.robot  # RobotView of the Go2 chase env (env/adapter.py)
         self.dev = env.device
         self.policy = torch.jit.load(path, map_location=self.dev).eval()
-        names = list(self.robot.joint_names)
+        names = list(JOINT_NAMES)
         self.idx = torch.tensor([names.index(j) for j in JOINTS], device=self.dev)
         self.default = torch.tensor([_default(j) for j in JOINTS], device=self.dev)
-        self.our_scale = torch.tensor(
-            [next(v for k, v in GO2_ACTION_SCALE.items() if re.fullmatch(k, n)) for n in names],
-            device=self.dev,
-        )
+        self.our_scale = torch.tensor(action_scale(), device=self.dev)
         self.cmd_scale = torch.tensor(COMMAND_SCALE, device=self.dev)
         self.dims, self.hist_len = list(self.policy.feature_dims), int(self.policy.history_len)
         self.hist = torch.zeros(env.num_envs, sum(self.dims) * self.hist_len, device=self.dev)
@@ -60,7 +56,7 @@ class MoeCtsDriver:
 
     def act(self, cmd: torch.Tensor) -> torch.Tensor:
         """Our joint_pos action (N, 12) for velocity commands (N, 3): vx, vy, yaw rate."""
-        d = self.robot.data
+        d = self.robot
         terms = [
             0.25 * d.root_link_ang_vel_b,
             d.projected_gravity_b,

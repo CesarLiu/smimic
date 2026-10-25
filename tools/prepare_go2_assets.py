@@ -3,10 +3,13 @@
 
   uv run tools/prepare_go2_assets.py                          # download from GitHub
   uv run tools/prepare_go2_assets.py --from ../go2-supermimic/go2_supermimic/robot/assets
-  uv run tools/prepare_go2_assets.py --check                  # compile the scene only
+  uv run tools/prepare_go2_assets.py --check                  # compile the scenes only
+  uv run tools/prepare_go2_assets.py --driver                 # also the terrain-walking driver
 
-The meshes (about 28 MB) are gitignored like the G1 ones; go2_chase.xml and
-scene_go2_chase.xml are tracked.
+The meshes (about 28 MB) and the driver are gitignored like the G1 assets; the robot,
+scene and terrain files are tracked. The driver is go2_rl_lab's mixed-terrain MoE-CTS
+policy (MIT, Hugging Face wty-yy/go2_rl_gym_data) that go2-supermimic uses to collect
+world-model data on terrain (unisupermimic-go2-train --driver-policy).
 """
 
 from __future__ import annotations
@@ -34,13 +37,26 @@ MESHES = (
     "foot.obj",
 )
 URL = "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/main/unitree_go2/assets/"
+DRIVER_REPO = "wty-yy/go2_rl_gym_data"
+DRIVER_FILE = "go2_rl_lab/2026-10-13_15-35-09_mixed1.3.2resume_82.5k_0.6929/exported/policy.pt"
 
 
 def check() -> None:
     import mujoco
 
-    model = mujoco.MjModel.from_xml_path(str(GO2 / "scene_go2_chase.xml"))
-    print(f"scene compiles: nq {model.nq}, nu {model.nu}, ngeom {model.ngeom}")
+    for name in ("scene_go2_chase", "scene_go2_chase_obstacles", "scene_go2_chase_terrain"):
+        model = mujoco.MjModel.from_xml_path(str(GO2 / f"{name}.xml"))
+        print(f"{name} compiles: nq {model.nq}, nu {model.nu}, ngeom {model.ngeom}")
+
+
+def fetch_driver() -> None:
+    from huggingface_hub import hf_hub_download
+
+    path = Path(hf_hub_download(DRIVER_REPO, DRIVER_FILE))
+    target = GO2 / "driver" / "policy.pt"
+    target.parent.mkdir(exist_ok=True)
+    shutil.copyfile(path, target)
+    print(f"terrain-walking driver -> {target}")
 
 
 def main() -> None:
@@ -55,6 +71,7 @@ def main() -> None:
         help="copy from a local assets directory instead of downloading",
     )
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--driver", action="store_true", help="also fetch the MoE-CTS driver")
     args = parser.parse_args()
     if not args.check:
         target = GO2 / "assets"
@@ -66,6 +83,8 @@ def main() -> None:
                 with urllib.request.urlopen(URL + name, timeout=60) as response:
                     (target / name).write_bytes(response.read())
         print(f"{len(MESHES)} meshes -> {target}")
+    if args.driver:
+        fetch_driver()
     check()
 
 

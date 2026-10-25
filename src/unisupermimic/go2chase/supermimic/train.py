@@ -31,7 +31,7 @@ from unisupermimic.go2chase.target import terrain as tr
 @dataclass(kw_only=True)
 class TrainCfg:
     task: str = "Go2-Chase-Flat"
-    """Only Go2-Chase-Flat is ported to UniLab so far (obstacles and terrain are not)."""
+    """Go2-Chase-Flat, Go2-Chase-Obstacles or Go2-Chase-Terrain."""
     backend: str = "mjwarp"
     num_envs: int = 4096
     buffer_len: int = 1000
@@ -235,14 +235,22 @@ class Trainer:
     def __init__(self, cfg: TrainCfg):
         from unisupermimic.go2chase.env.adapter import ACTOR_HISTORY, Go2ChaseEnv
 
-        if cfg.task != "Go2-Chase-Flat":
-            raise NotImplementedError(f"{cfg.task} is not ported to UniLab yet (Go2-Chase-Flat is)")
+        tasks = {
+            "Go2-Chase-Flat": "flat",
+            "Go2-Chase-Obstacles": "obstacles",
+            "Go2-Chase-Terrain": "terrain",
+        }
+        if cfg.task not in tasks:
+            raise ValueError(f"task must be one of {list(tasks)}, got {cfg.task!r}")
         self.cfg = cfg
         torch.manual_seed(cfg.seed)
-        self.env = Go2ChaseEnv(cfg.num_envs, seed=cfg.seed, backend=cfg.backend)
+        self.env = Go2ChaseEnv(
+            cfg.num_envs, seed=cfg.seed, backend=cfg.backend, task=tasks[cfg.task]
+        )
         self.dev = self.env.device
         self.term = self.env.term
         self.term.gen.cfg.curriculum_steps = cfg.target_curriculum_iterations
+        self.term.cfg.terrain_curriculum_steps = cfg.terrain_curriculum_iterations
         self.history = ACTOR_HISTORY
 
         obs, _ = self.env.reset()
@@ -276,7 +284,12 @@ class Trainer:
             horizon=cfg.horizon, compile=cfg.compile, sensor_grad=cfg.sensor_grad, weights=weights
         )
         self.field = self.term.height_field  # None on flat ground
-        self.terms = st.OBS_TERMS  # flat ground: no LiDAR, no height scan
+        # actor terms in env order: obstacles append a LiDAR, terrain a height scan
+        self.terms = st.OBS_TERMS
+        if self.term.obstacle_layout is not None:
+            self.terms += (("lidar", self.term.cfg.target.obstacles.lidar_rays),)
+        if self.term.height_field is not None:
+            self.terms += (("height_scan", tr.SCAN_POINTS),)
         self.imag = Imagination(
             imag_cfg,
             self.consts,
@@ -290,8 +303,6 @@ class Trainer:
         self.opt_critic = torch.optim.Adam(self.critic.parameters(), lr=cfg.lr)
         self.driver = self.expert = None
         if cfg.driver_policy:
-            # the MoE-CTS terrain-walking driver reads mjlab env internals (terrain task)
-            raise NotImplementedError("driver_policy is not ported to UniLab yet")
             from unisupermimic.go2chase.supermimic.driver import ChaseSteer, MoeCtsDriver
 
             self.driver = MoeCtsDriver(self.env, cfg.driver_policy)
