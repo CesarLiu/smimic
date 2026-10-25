@@ -219,6 +219,21 @@ uv run unisupermimic-train training.log_dir=runs/driven \
   algo.driver_ckpt=runs/uni_ppo_g1/ckpt_XXXXXX.pt algo.driver_frac=0.25 algo.driver_fade=[2000,6000]
 ```
 
+### Go2 chase / dodge (go2-supermimic on UniLab)
+
+[go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) trains a Unitree Go2 to chase a fleeing ball while dodging thrown balls and bars, with its own SuperMimic variant (70-dim yaw-frame world-model state with limb points, analytic chase/dodge rewards in imagination). Its algorithm and target dynamics are vendored under `unisupermimic.go2chase` (MIT); the environment is rewritten for UniLab (`go2chase/env`, task `Go2ChaseFlat`, mjwarp or mujoco). Flat ground only so far: static obstacles (mocap boxes, LiDAR) and generated terrain (height scan, terrain driver) are not ported yet.
+
+The port is checked against go2-supermimic's own mjlab environment: its pretrained `weights/flat.pt` scores the same there and here (chase + dodge, 256 envs, 60 s: 33.5 vs 32.5 tags/min, ball hit rates 0.21-0.25 vs 0.23-0.27, falls 0.004 vs 0.008 per minute), and the actor observation rebuilt from the world-model state equals the env's exactly. Actuators are MuJoCo position actuators with go2's gains and torque limits; mjlab's DC-motor torque-speed curve and 0-2 substep command delay are not modelled (removing them in mjlab leaves the metrics unchanged).
+
+```bash
+uv run tools/prepare_go2_assets.py                 # Menagerie Go2 meshes (gitignored)
+uv run unisupermimic-go2-train --run-name flat     # go2 TrainCfg flags; runs/go2chase/<stamp>_flat
+uv run unisupermimic-go2-eval --checkpoint runs/go2chase/<run>/model_40000.pt --mode both
+uv run tools/launch.py run go2_robot --gpus 0,1    # go2_flat_s0/s1, 40k iterations + evaluation
+```
+
+On one L4 a full-size run (4096 envs) takes about 1.1 s per iteration and 17 GB.
+
 ### Experiment launcher (H100/H200)
 
 `tools/launch.py` queues named experiments over the visible GPUs (strict FIFO, one job per free GPU or GPU group). Each job trains, then evaluates the final checkpoint: nominal plus pushes of 0.5, 1.0, and 1.5 m/s, and the BONES pack for BONES runs. `tools/report_push.py` prints the table, with mean ± std over seeds.
@@ -231,7 +246,7 @@ uv run tools/launch.py eval push_ab --curve       # nominal eval of every saved 
 uv run tools/report_push.py
 ```
 
-Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`, `go2` (training techniques from go2-supermimic). On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
+Groups: `push_ab`, `push_ablation` (simulator or imagined kicks only), `push_seeds`, `multi_gpu`, `ppo` (1/4/8 GPUs), `bones`, `go2` (training techniques from go2-supermimic), `go2_robot` (Go2 chase / dodge). On one L4, a default 12k-iteration run takes about 5 h to train and 1.4 h for the four evaluations.
 
 ## Results
 

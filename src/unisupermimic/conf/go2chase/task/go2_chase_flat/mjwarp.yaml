@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - /task/go2_chase_flat/base
+  - _self_
+
+training:
+  task_name: Go2ChaseFlat
+  sim_backend: mjwarp
+
+env:
+  mjwarp_nconmax: 64
+  mjwarp_njmax: 300

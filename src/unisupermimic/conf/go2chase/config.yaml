@@ -1,0 +1,20 @@
+# Go2 chase / dodge (go2-supermimic on UniLab). The SuperMimic trainer is go2-supermimic's
+# own (go2chase/supermimic/train.py, its TrainCfg on the command line); this config only
+# builds the environment.
+defaults:
+  - _self_
+  - task: go2_chase_flat/mjwarp
+
+training:
+  task_name: Go2ChaseFlat
+  sim_backend: mjwarp
+  collector_tensor_device: auto
+  play_only: false
+  sim2sim_strict: false
+  log_root: null
+  log_dir: null
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

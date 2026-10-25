@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - /task/go2_chase_obstacles/base
+  - _self_
+
+training:
+  task_name: Go2ChaseObstacles
+  sim_backend: mjwarp
+
+env:
+  # box-box pairs go through convex collision; at 64 contacts per world mujoco_warp 3.11's
+  # CCD buffer overflows without a bounds check (illegal memory access)
+  mjwarp_nconmax: 128
+  mjwarp_njmax: 400

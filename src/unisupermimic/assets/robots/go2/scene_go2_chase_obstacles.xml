@@ -1,0 +1,70 @@
+<mujoco model="go2 chase obstacles scene">
+  <include file="go2_chase.xml"/>
+
+  <!-- solver settings of go2-supermimic (mjlab SimulationCfg) -->
+  <option timestep="0.005" integrator="implicitfast" impratio="10" cone="elliptic"
+          solver="Newton" iterations="10" ls_iterations="20" tolerance="1e-8"
+          ls_tolerance="0.01" ccd_iterations="50"/>
+
+  <statistic center="0 0 0.3" extent="2"/>
+
+  <visual>
+    <headlight ambient="0.3 0.3 0.3" diffuse="0.6 0.6 0.6" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="135" elevation="-25" offwidth="1920" offheight="1080"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.93 0.95 0.98" rgb2="0.62 0.74 0.87" width="512" height="3072"/>
+    <texture type="2d" name="grid" builtin="checker" mark="edge" rgb1="0.66 0.66 0.65" rgb2="0.62 0.62 0.61" markrgb="0.46 0.47 0.5" width="512" height="512"/>
+    <material name="ground" texture="grid" texuniform="true"/>
+  </asset>
+
+  <worldbody>
+    <light name="fill" pos="0 0 10" dir="0.282216 0.188144 -0.940721" type="directional" castshadow="false" diffuse="0.5 0.5 0.5"/>
+    <geom name="floor" size="0 0 0.01" type="plane" material="ground"/>
+    <!-- static obstacles (go2-supermimic env_cfg._obstacle_entity): 1e6 kg boxes on planar
+         joints with 1e6 damping, placed per episode through their joint positions
+         (UniLab mjwarp resets do not support mocap bodies); unused slots park far away -->
+    <body name="obstacle0" pos="0 0 0.505">
+      <joint name="obstacle0_x" type="slide" axis="1 0 0" damping="1e6"/>
+      <joint name="obstacle0_y" type="slide" axis="0 1 0" damping="1e6"/>
+      <joint name="obstacle0_yaw" type="hinge" axis="0 0 1" damping="1e6"/>
+      <geom name="obstacle0" type="box" size="0.15 0.15 0.5" mass="1e6" rgba="0.62 0.5 0.36 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obstacle1" pos="0 0 0.505">
+      <joint name="obstacle1_x" type="slide" axis="1 0 0" damping="1e6"/>
+      <joint name="obstacle1_y" type="slide" axis="0 1 0" damping="1e6"/>
+      <joint name="obstacle1_yaw" type="hinge" axis="0 0 1" damping="1e6"/>
+      <geom name="obstacle1" type="box" size="0.15 0.15 0.5" mass="1e6" rgba="0.62 0.5 0.36 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obstacle2" pos="0 0 0.505">
+      <joint name="obstacle2_x" type="slide" axis="1 0 0" damping="1e6"/>
+      <joint name="obstacle2_y" type="slide" axis="0 1 0" damping="1e6"/>
+      <joint name="obstacle2_yaw" type="hinge" axis="0 0 1" damping="1e6"/>
+      <geom name="obstacle2" type="box" size="0.45 0.3 0.5" mass="1e6" rgba="0.62 0.5 0.36 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obstacle3" pos="0 0 0.505">
+      <joint name="obstacle3_x" type="slide" axis="1 0 0" damping="1e6"/>
+      <joint name="obstacle3_y" type="slide" axis="0 1 0" damping="1e6"/>
+      <joint name="obstacle3_yaw" type="hinge" axis="0 0 1" damping="1e6"/>
+      <geom name="obstacle3" type="box" size="0.45 0.3 0.5" mass="1e6" rgba="0.62 0.5 0.36 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obstacle4" pos="0 0 0.505">
+      <joint name="obstacle4_x" type="slide" axis="1 0 0" damping="1e6"/>
+      <joint name="obstacle4_y" type="slide" axis="0 1 0" damping="1e6"/>
+      <joint name="obstacle4_yaw" type="hinge" axis="0 0 1" damping="1e6"/>
+      <geom name="obstacle4" type="box" size="1.0 0.05 0.5" mass="1e6" rgba="0.62 0.5 0.36 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obstacle5" pos="0 0 0.505">
+      <joint name="obstacle5_x" type="slide" axis="1 0 0" damping="1e6"/>
+      <joint name="obstacle5_y" type="slide" axis="0 1 0" damping="1e6"/>
+      <joint name="obstacle5_yaw" type="hinge" axis="0 0 1" damping="1e6"/>
+      <geom name="obstacle5" type="box" size="1.0 0.05 0.5" mass="1e6" rgba="0.62 0.5 0.36 1" contype="1" conaffinity="1"/>
+    </body>
+  </worldbody>
+
+  <keyframe>
+    <key name="home" qpos="0 0 0.29 1 0 0 0 0.1 0.9 -1.8 -0.1 0.9 -1.8 0.1 0.9 -1.8 -0.1 0.9 -1.8 100.0 100.0 0 105.0 100.0 0 110.0 100.0 0 115.0 100.0 0 120.0 100.0 0 125.0 100.0 0" ctrl="0.1 0.9 -1.8 -0.1 0.9 -1.8 0.1 0.9 -1.8 -0.1 0.9 -1.8"/>
+  </keyframe>
+</mujoco>

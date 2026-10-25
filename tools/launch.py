@@ -27,6 +27,9 @@ BIN = ROOT / ".venv" / "bin"
 TRAIN = str(BIN / "unisupermimic-train")
 TORCHRUN = str(BIN / "torchrun")
 EVAL = str(BIN / "unisupermimic-eval")
+GO2_TRAIN = str(BIN / "unisupermimic-go2-train")
+GO2_EVAL = str(BIN / "unisupermimic-go2-eval")
+GO2_ITERATIONS = 40_000  # go2-supermimic TrainCfg default
 PUSH_SPEEDS = (0.5, 1.0, 1.5)  # m/s horizontal kicks every 3 s (see evaluate.evaluate)
 FINAL_ITERATION = 12000  # the default algo.iterations
 
@@ -94,6 +97,11 @@ experiment(
     pack=BONES_PACK,
 )
 
+# Go2 chase / dodge (go2-supermimic's own trainer on the UniLab env; flat ground from scratch).
+# Overrides are go2 TrainCfg flags; evaluation: chase + dodge and chase only, hardest setting.
+for seed in range(2):
+    experiment(f"go2_flat_s{seed}", [f"--seed={seed}"], "Go2 chase/dodge, flat, 40k it", algo="go2")
+
 # go2-supermimic techniques on G1 tracking: each alone and all together (compare with uni_base)
 experiment("uni_rare_s0", ["algo.seed=0"] + RARE, "rare-event world-model batches")
 experiment("uni_explore_s0", ["algo.seed=0"] + EXPLORE, "correlated exploration noise")
@@ -108,6 +116,7 @@ GROUPS = {
     "ppo": ["uni_ppo_g1", "uni_ppo_g4", "uni_ppo_g8"],
     "bones": ["uni_bones_s0", "uni_bones_g2_s0"],
     "go2": ["uni_rare_s0", "uni_explore_s0", "uni_stable_s0", "uni_go2_all_s0"],
+    "go2_robot": ["go2_flat_s0", "go2_flat_s1"],
 }
 
 
@@ -123,6 +132,13 @@ def expand(names: list[str]) -> list[str]:
 
 
 def train_command(name: str) -> list[str]:
+    if E[name]["algo"] == "go2":
+        return [
+            GO2_TRAIN,
+            f"--log-dir=runs/{name}",
+            f"--iterations={GO2_ITERATIONS}",
+            *E[name]["overrides"],
+        ]
     args = [f"training.log_dir=runs/{name}", *E[name]["overrides"]]
     n, ppo = E[name]["gpus"], E[name]["algo"] == "ppo"
     if n > 1:  # data parallel: one rank per GPU (scripts/train_ddp.py)
@@ -142,6 +158,20 @@ def train_command(name: str) -> list[str]:
 
 def eval_commands(name: str, curve: bool) -> list[list[str]]:
     run = ROOT / "runs" / name
+    if E[name]["algo"] == "go2":
+        final = run / f"model_{GO2_ITERATIONS}.pt"
+        return [
+            [
+                GO2_EVAL,
+                "--checkpoint",
+                str(final),
+                "--mode",
+                mode,
+                "--json",
+                str(run / f"model_{GO2_ITERATIONS}_eval_{mode}.json"),
+            ]
+            for mode in ("both", "chase")
+        ]
     if curve:
         ckpts = sorted(run.glob("ckpt_*.pt"))
         return [[EVAL, "--backend", "mjwarp", "--ckpt", str(c)] for c in ckpts]

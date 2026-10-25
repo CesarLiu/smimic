@@ -1,0 +1,27 @@
+# @package _global_
+# Go2-Chase-Terrain: go2-supermimic's generated terrain (stairs up and down, box grids,
+# rough ground, slopes; 5 rows of difficulty), an 11 x 7 height scan for the actor, chase
+# only or chase while dodging thrown bars, and a higher fall penalty.
+defaults:
+  - /task/go2_chase_flat/base
+  - _self_
+
+env:
+  scene:
+    model_file: src/unisupermimic/assets/robots/go2/scene_go2_chase_terrain.xml
+  observations:
+    policy:
+      terms:
+        height_scan:
+          func: unisupermimic.go2chase.env.terms.height_scan
+          params: {command_name: target}
+          noise: {_target_: unilab.managers.UniformNoiseCfg, n_min: -0.02, n_max: 0.02}
+  commands:
+    target:
+      task: terrain
+      mode_probs: [0.6, 0.0, 0.4]
+
+reward:
+  terminated:
+    func: unilab.envs.mdp.is_terminated
+    weight: -600.0

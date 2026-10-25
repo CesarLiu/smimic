@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - /task/go2_chase_terrain/base
+  - _self_
+
+training:
+  task_name: Go2ChaseTerrain
+  sim_backend: mjwarp
+
+env:
+  mjwarp_nconmax: 128
+  mjwarp_njmax: 400

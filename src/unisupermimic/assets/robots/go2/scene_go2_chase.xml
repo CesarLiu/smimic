@@ -1,0 +1,31 @@
+<mujoco model="go2 chase scene">
+  <include file="go2_chase.xml"/>
+
+  <!-- solver settings of go2-supermimic (mjlab SimulationCfg) -->
+  <option timestep="0.005" integrator="implicitfast" impratio="10" cone="elliptic"
+          solver="Newton" iterations="10" ls_iterations="20" tolerance="1e-8"
+          ls_tolerance="0.01" ccd_iterations="50"/>
+
+  <statistic center="0 0 0.3" extent="2"/>
+
+  <visual>
+    <headlight ambient="0.3 0.3 0.3" diffuse="0.6 0.6 0.6" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="135" elevation="-25" offwidth="1920" offheight="1080"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.93 0.95 0.98" rgb2="0.62 0.74 0.87" width="512" height="3072"/>
+    <texture type="2d" name="grid" builtin="checker" mark="edge" rgb1="0.66 0.66 0.65" rgb2="0.62 0.62 0.61" markrgb="0.46 0.47 0.5" width="512" height="512"/>
+    <material name="ground" texture="grid" texuniform="true"/>
+  </asset>
+
+  <worldbody>
+    <light name="fill" pos="0 0 10" dir="0.282216 0.188144 -0.940721" type="directional" castshadow="false" diffuse="0.5 0.5 0.5"/>
+    <geom name="floor" size="0 0 0.01" type="plane" material="ground"/>
+  </worldbody>
+
+  <keyframe>
+    <key name="home" qpos="0 0 0.29 1 0 0 0 0.1 0.9 -1.8 -0.1 0.9 -1.8 0.1 0.9 -1.8 -0.1 0.9 -1.8" ctrl="0.1 0.9 -1.8 -0.1 0.9 -1.8 0.1 0.9 -1.8 -0.1 0.9 -1.8"/>
+  </keyframe>
+</mujoco>

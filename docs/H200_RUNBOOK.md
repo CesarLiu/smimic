@@ -15,6 +15,7 @@ uv sync                                          # 安装 unilab、三个仿真�
 # LAFAN1/G1 资产：从 Hugging Face 下载，生成并校验 MJCF（40 个 CSV）
 uv run tools/prepare_supermimic_assets.py
 uv run tools/prepare_supermimic_assets.py --validate-only
+uv run tools/prepare_go2_assets.py                # Go2 网格（只有跑 go2_robot 组才需要）
 
 nvidia-smi                                       # 记下可用的 GPU 编号
 ```
@@ -151,7 +152,8 @@ nohup uv run tools/launch.py run push_seeds push_ablation --gpus 0,1,2,3 > launc
 | 3 | `multi_gpu` | 基线 / 推力注入，双卡 DDP | 每个 2 块 | 学习率自动乘 √2 |
 | 4 | `bones` | BONES-SEED 动作库，单卡 / 双卡 | 1 块 / 2 块 | 先准备数据，见下 |
 | 5 | `go2` | 来自 go2-supermimic 的技巧：稀有事件采样 / 探索噪声 / 稳定性各自单独，以及三者一起（4 个任务） | 每个 1 块 | 与 `uni_base_s0` 对比；README "来自 go2-supermimic 的训练技巧" |
-| 6 | `ppo` | PPO-Sim，1 / 4 / 8 卡，各 18 小时 | 1 / 4 / 8 块 | 最耗时，最后跑 |
+| 6 | `go2_robot` | Go2 追逐与躲避，平地，从零训练 4 万次迭代（2 个种子），训练后评测追逐加躲避模式和只追逐模式 | 每个 1 块 | L4 上约 1.1 秒一次迭代、17 GB；结果写成 `runs/go2_flat_s*/model_40000_eval_{both,chase}.json`。go2 预训练策略的参考值：每分钟追到约 33 次，球命中率 0.21–0.27 |
+| 7 | `ppo` | PPO-Sim，1 / 4 / 8 卡，各 18 小时 | 1 / 4 / 8 块 | 最耗时，最后跑 |
 
 推力方向确认有效后，下一步移植"按世界模型误差选 reset"，届时会在启动器里加新的实验名。
 

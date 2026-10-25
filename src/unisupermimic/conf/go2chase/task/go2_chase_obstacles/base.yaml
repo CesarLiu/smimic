@@ -1,0 +1,29 @@
+# @package _global_
+# Go2-Chase-Obstacles: tall boxes, pillars and walls placed per episode (heavy jointed boxes), a
+# 16-ray planar LiDAR for the actor, slower throws, and an obstacle-contact penalty.
+defaults:
+  - /task/go2_chase_flat/base
+  - _self_
+
+env:
+  scene:
+    model_file: src/unisupermimic/assets/robots/go2/scene_go2_chase_obstacles.xml
+    entities:
+      obstacles:   # six static boxes on planar joints (see the scene file)
+        joint_names: [obstacle0_x, obstacle0_y, obstacle0_yaw, obstacle1_x, obstacle1_y, obstacle1_yaw, obstacle2_x, obstacle2_y, obstacle2_yaw, obstacle3_x, obstacle3_y, obstacle3_yaw, obstacle4_x, obstacle4_y, obstacle4_yaw, obstacle5_x, obstacle5_y, obstacle5_yaw]
+  observations:
+    policy:
+      terms:
+        lidar:
+          func: unisupermimic.go2chase.env.terms.lidar
+          params: {command_name: target}
+          noise: {_target_: unilab.managers.UniformNoiseCfg, n_min: -0.03, n_max: 0.03}
+  commands:
+    target:
+      task: obstacles
+
+reward:
+  obstacle_contact:
+    func: unisupermimic.go2chase.env.terms.obstacle_contact
+    weight: -100.0
+    params: {command_name: target}

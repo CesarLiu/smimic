@@ -1,3 +1,6 @@
 """UniLab task registrations provided by UniSuperMimic."""
 
-__unilab_registry_modules__ = ("unisupermimic.tasks.motion_tracking.g1.supermimic.registry",)
+__unilab_registry_modules__ = (
+    "unisupermimic.tasks.motion_tracking.g1.supermimic.registry",
+    "unisupermimic.go2chase.env.registry",
+)

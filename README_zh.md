@@ -223,6 +223,28 @@ uv run unisupermimic-train training.log_dir=runs/driven \
   algo.driver_ckpt=runs/uni_ppo_g1/ckpt_XXXXXX.pt algo.driver_frac=0.25 algo.driver_fade=[2000,6000]
 ```
 
+### Go2 追逐与躲避（go2-supermimic 移植到 UniLab）
+
+[go2-supermimic](https://github.com/Zhengtianjin/go2-supermimic) 训练 Unitree Go2 追逐逃跑的球，同时躲避扔来的球和横杆。它有自己的 SuperMimic 变体：世界模型状态是 yaw 坐标系下的 70 维向量，包含腿部各点位置；想象 rollout 中用解析的追逐 / 躲避奖励。算法和目标动力学原样拷贝在 `unisupermimic.go2chase` 下（MIT 许可），环境为 UniLab 重写（`go2chase/env`，任务名 `Go2ChaseFlat`，支持 mjwarp 和 mujoco 后端）。目前只移植了平地：静态障碍物（mocap 方块、LiDAR）和生成地形（高度扫描、地形 driver）还没有移植。
+
+移植结果已与 go2-supermimic 自己的 mjlab 环境对照验证：
+- 预训练策略 `weights/flat.pt` 在两边得分一致。追逐加躲避模式，256 个环境、60 秒：
+  - 每分钟追到 33.5 次，原版 32.5 次；
+  - 球的命中率 0.21–0.25，原版 0.23–0.27；
+  - 每分钟摔倒 0.004 次，原版 0.008 次。
+- 从世界模型状态重建的 actor 观测与环境给出的完全相同。
+
+执行器用 MuJoCo 位置执行器，增益和力矩上限与 go2 相同；mjlab 的直流电机力矩-速度曲线和 0–2 个物理子步的指令延迟没有建模（在 mjlab 里去掉这两项，指标不变）。
+
+```bash
+uv run tools/prepare_go2_assets.py                 # 下载 Menagerie 的 Go2 网格（不进 git）
+uv run unisupermimic-go2-train --run-name flat     # 参数同 go2 的 TrainCfg；输出到 runs/go2chase/<时间戳>_flat
+uv run unisupermimic-go2-eval --checkpoint runs/go2chase/<run>/model_40000.pt --mode both
+uv run tools/launch.py run go2_robot --gpus 0,1    # go2_flat_s0/s1，4 万次迭代并评测
+```
+
+在单块 L4 上，全尺寸训练（4096 个环境）约 1.1 秒一次迭代，显存约 17 GB。
+
 ### 实验启动器（H100/H200）
 
 `tools/launch.py` 把命名好的实验按可见 GPU 排队：严格先进先出，每块（或每组）空闲 GPU 跑一个任务。每个任务训练完成后评测最终 checkpoint，包括常规评测和 0.5、1.0、1.5 m/s 三档推力；BONES 实验还会在 BONES 动作库上评测。`tools/report_push.py` 汇总结果表，多个种子时给出均值 ± 标准差。
@@ -242,7 +264,8 @@ uv run tools/report_push.py
 - `multi_gpu`；
 - `ppo`：1/4/8 GPU；
 - `bones`；
-- `go2`：来自 go2-supermimic 的训练技巧。
+- `go2`：来自 go2-supermimic 的训练技巧；
+- `go2_robot`：Go2 追逐与躲避。
 
 在单块 L4 上，默认的 12k 迭代训练约需 5 小时，四次评测约需 1.4 小时。
 
