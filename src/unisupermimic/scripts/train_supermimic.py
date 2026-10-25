@@ -167,13 +167,21 @@ def main(cfg: DictConfig) -> None:
 
             assert checkpoint is not None
             saved = torch.load(checkpoint, map_location=device, weights_only=True)
+            push_speed = float(OmegaConf.select(cfg, "eval.push_speed", default=0.0))
             with policy_load_dim_guard(
                 env_obs_dim=env.supermimic_mdp.obs_dim,
                 env_action_dim=env.action_manager.total_action_dim,
                 algo_name="supermimic",
             ):
-                result = evaluate(env, saved)
-            destination = checkpoint.with_name(checkpoint.stem + "_eval.json")
+                result = evaluate(
+                    env,
+                    saved,
+                    push_speed=push_speed,
+                    push_every=int(OmegaConf.select(cfg, "eval.push_every", default=150)),
+                    push_seed=int(OmegaConf.select(cfg, "eval.push_seed", default=0)),
+                )
+            suffix = f"_eval_push{push_speed:g}.json" if push_speed > 0 else "_eval.json"
+            destination = checkpoint.with_name(checkpoint.stem + suffix)
             temporary = destination.with_name(destination.name + ".tmp")
             temporary.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
             temporary.replace(destination)

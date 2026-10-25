@@ -15,6 +15,7 @@ from unilab.base.torch_env import TorchEnvState
 from unilab.envs.manager_based_rl_env import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from unisim.backend.base import SimBackend
 
+from unisupermimic.rl.algos.supermimic.geometry import sample_push
 from unisupermimic.rl.contracts.supermimic import (
     SUPERMIMIC_STATE_KEY,
     SUPERMIMIC_TRANSITION_KEY,
@@ -31,8 +32,16 @@ from .motion import CONTROL_DT
 from .robot import COLLISION_GEOM_NAMES
 
 
+PUSH_TERM = "supermimic_push"
+
+
 class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
-    """Publish detached SuperMimic transitions around the Manager reset boundary."""
+    """Publish detached SuperMimic transitions around the Manager reset boundary.
+
+    Optional push injection: kicks are applied right after a transition is recorded, so its
+    ``s1`` stays the clean physics target, and each transition carries the kick that produced
+    its start state (``push``), which the world-model fit replays exactly.
+    """
 
     def __init__(self, cfg: ManagerBasedRlEnvCfg, backend: SimBackend, num_envs: int):
         if cfg.scale_rewards_by_dt:
@@ -42,6 +51,9 @@ class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
         if not math.isclose(cfg.ctrl_dt, CONTROL_DT, rel_tol=0.0, abs_tol=1.0e-9):
             raise ValueError(f"SuperMimic requires ctrl_dt={CONTROL_DT}")
         super().__init__(cfg, backend, num_envs)
+        # backend classes live in unisim.backend.<name>.backend
+        module = type(backend).__module__.split(".")
+        self.backend_type = module[2] if module[:2] == ["unisim", "backend"] else ".".join(module)
         commands: list[SuperMimicCommand] = []
         for name in self.command_manager.active_terms:
             command = self.command_manager.get_term(name)
@@ -51,6 +63,68 @@ class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
             raise ValueError("SuperMimic requires exactly one SuperMimicCommand term")
         self._supermimic_command = commands[0]
         self._pre_action: dict[str, Any] | None = None
+        command = self._supermimic_command
+        self._push_scale = 0.0 if command.cfg.eval_mode else float(command.cfg.push_scale)
+        self._push_bound = False
+        if self._push_scale > 0.0:
+            self._bind_push()
+        lo, hi = (int(round(float(value) / CONTROL_DT)) for value in command.cfg.push_interval_s)
+        self._push_steps = (lo, max(lo, hi))
+        # kick that produced each env's current state (zero after a reset or without pushes)
+        self._pending_push = torch.zeros((num_envs, 6), dtype=torch.float32, device=self.device)
+        self._push_timer = torch.zeros(num_envs, dtype=torch.int64, device=self.device)
+        self._reset_push_timer(torch.ones(num_envs, dtype=torch.bool, device=self.device))
+
+    def _bind_push(self) -> None:
+        # Linear kicks only (see PUSH_RANGE). Only mjwarp applies them exactly: the MuJoCo host
+        # backend's interval velocity delta also perturbs other state, which would corrupt the
+        # logged transitions, so pushes fail closed elsewhere.
+        if self.backend_type != "mjwarp":
+            raise NotImplementedError(
+                f"SuperMimic push injection requires the mjwarp backend, got {self.backend_type!r}"
+            )
+        self._supermimic_command.robot.bind_root_linear_velocity_delta(term_name=PUSH_TERM)
+        self._push_bound = True
+
+    def _apply_linear_push(self, push: torch.Tensor, ids: torch.Tensor) -> None:
+        if bool((push[ids, 3:6] != 0).any()):
+            raise ValueError("SuperMimic push injection supports linear root kicks only")
+        self._supermimic_command.robot.apply_root_velocity_delta_to_sim(
+            push[ids, 0:3], None, env_ids=ids, term_name=PUSH_TERM
+        )
+        self.scene._invalidate_state_reads()
+        self._refresh_tensor_reads_after_mutation()
+
+    def _reset_push_timer(self, mask: torch.Tensor) -> None:
+        lo, hi = self._push_steps
+        draw = torch.randint(lo, hi + 1, (self.num_envs,), device=self.device)
+        self._push_timer = torch.where(mask, draw, self._push_timer)
+
+    def apply_root_push(self, push: torch.Tensor, mask: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Add world-frame root-velocity kicks ``push`` (num_envs, 6) to envs in ``mask``.
+
+        Refreshes the tensor reads and returns the new current SuperMimic state info (also
+        published to ``state.info``), so the next observation sees the post-kick state.
+        """
+        if not self._push_bound:
+            self._bind_push()
+        ids = mask.nonzero(as_tuple=False).flatten()
+        if ids.numel() > 0:
+            self._apply_linear_push(push, ids)
+        current = self._current_info()
+        if self._state is not None:
+            self._state.info[SUPERMIMIC_STATE_KEY] = current
+        return current
+
+    def _scheduled_push(self, done: torch.Tensor) -> None:
+        """Interval kicks (every push_interval_s) on envs that are not about to reset."""
+        self._push_timer -= 1
+        due = (self._push_timer <= 0) & ~done
+        push = sample_push(self.num_envs, self._push_scale, self.device) * due.unsqueeze(-1)
+        if bool(due.any()):
+            self._apply_linear_push(push, due.nonzero(as_tuple=False).flatten())
+        self._pending_push = push
+        self._reset_push_timer(self._push_timer <= 0)
 
     @property
     def supermimic_mdp(self) -> SuperMimicMdpProtocol:
@@ -65,6 +139,7 @@ class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
             "previous_action": command.a_prev.detach().clone(),
             "ep_step": command.ep_step.detach().clone(),
             "action": actions.detach().clone(),
+            "push": self._pending_push.clone(),
         }
         return super().apply_action(actions, state)
 
@@ -86,6 +161,9 @@ class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
             updated.truncated,
         )
         transition.update(command.last_episode_stats)
+        transition["push"] = self._pre_action["push"]
+        if self._push_scale > 0.0:  # after s1 was read: the kick shapes the next start state
+            self._scheduled_push(updated.terminated | updated.truncated)
         updated.info[SUPERMIMIC_TRANSITION_KEY] = transition
         updated.info[SUPERMIMIC_STATE_KEY] = self._current_info()
         self._pre_action = None
@@ -121,6 +199,8 @@ class SuperMimicManagerBasedRlEnv(ManagerBasedRlEnv):
             reset_mask[ids] = True
         obs, info = super().reset(env_ids, seed=seed, options=options)
         assert self._state is not None
+        self._pending_push[reset_mask] = 0.0
+        self._reset_push_timer(reset_mask)
         current = self._current_info()
         previous = self._state.info.get(SUPERMIMIC_STATE_KEY)
         if previous is not None:

@@ -183,7 +183,38 @@ def invariant_features(state: State) -> torch.Tensor:
     )
 
 
+# Push range: world-frame root linear velocity x, y, z [m/s] from BeyondMimic's VELOCITY_RANGE,
+# then angular velocity roll, pitch, yaw [rad/s]. The angular kicks of BeyondMimic (0.52, 0.52,
+# 0.78) are zero here: the mjwarp backend has no interval angular-velocity delta, and the push
+# must be exact in the simulator for the world-model fit to replay it.
+PUSH_RANGE = (0.5, 0.5, 0.2, 0.0, 0.0, 0.0)
+
+
+def sample_push(
+    batch: int,
+    scale: float,
+    device: torch.device | str,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Uniform root-velocity kicks ``(batch, 6)`` within ``scale * PUSH_RANGE``."""
+    unit = torch.rand(batch, 6, device=device, generator=generator)
+    return (2.0 * unit - 1.0) * torch.tensor(PUSH_RANGE, device=device) * scale
+
+
+def add_push(state: State, push: torch.Tensor) -> State:
+    """Apply world-frame root-velocity kicks to a state.
+
+    The state stores world-frame root linear and angular velocity, so a push is an exact,
+    differentiable jump that the world model never has to learn.
+    """
+    p, rotation, v, w, q, qd = state
+    return (p, rotation, v + push[..., 0:3], w + push[..., 3:6], q, qd)
+
+
 __all__ = [
+    "PUSH_RANGE",
+    "add_push",
+    "sample_push",
     "axis_angle_to_mat",
     "flatten_state",
     "invariant_features",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import tempfile
 import time
@@ -67,8 +68,16 @@ def evaluate(
     env: SuperMimicManagerBasedRlEnv,
     checkpoint: dict,
     device: str | torch.device | None = None,
+    push_speed: float = 0.0,
+    push_every: int = 150,
+    push_seed: int = 0,
 ) -> dict:
-    """Evaluate every motion once from its first frame without observation/action noise."""
+    """Evaluate every motion once from its first frame without observation/action noise.
+
+    Push test (push_speed > 0): every ``push_every`` steps, a horizontal root-velocity kick
+    of ``push_speed`` m/s in a direction drawn from a ``push_seed`` generator, so every policy
+    faces the same kicks (common random numbers).
+    """
     mdp = cast(MDP, env.supermimic_mdp)
     motion = mdp.motion
     args = checkpoint["args"]
@@ -89,8 +98,15 @@ def evaluate(
     finished = torch.zeros(num_clips, dtype=torch.bool, device=env.device)
     failed = torch.zeros_like(finished)
     history = None
-
+    generator = torch.Generator(device=env.device).manual_seed(push_seed) if push_speed > 0 else None
+    t = 0
     while not bool(finished.all()):
+        if push_speed > 0 and t > 0 and t % push_every == 0:
+            angle = 2 * math.pi * torch.rand(num_clips, device=env.device, generator=generator)
+            push = torch.zeros((num_clips, 6), device=env.device)
+            push[:, 0], push[:, 1] = push_speed * torch.cos(angle), push_speed * torch.sin(angle)
+            current = env.apply_root_push(push, ~finished)
+        t += 1
         obs = mdp.obs(
             unflatten_state(current["s"]),
             current["a_prev"],
@@ -121,6 +137,7 @@ def evaluate(
         "norm_return_framew": (returns.sum() / max_returns.sum()).item(),
         "n_failed": len(failed_indices),
         "failed": [motion.names[index] for index in failed_indices],
+        "push_speed": push_speed,
         "per_clip": {
             name: {
                 "norm_return": normalized[index].item(),
@@ -254,6 +271,24 @@ def watch(
         time.sleep(poll_seconds)
 
 
+def _structural_overrides(run_dir: Path) -> list[str]:
+    """Hydra overrides restoring a run's structural ``algo.*`` choices (network sizes, goal
+    frames, history, ...) from its contract snapshot, so non-default runs evaluate without a
+    strict sim2sim mismatch. The environment side (motion library, MJCF) stays the default."""
+    path = Path(run_dir) / "run_config.json"
+    if not path.is_file():
+        return []
+    snapshot = json.loads(path.read_text(encoding="utf-8")).get("contract_snapshot") or {}
+    overrides = []
+    for key, value in snapshot.items():
+        if not key.startswith("algo.") or value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            value = "[" + ",".join(str(item) for item in value) + "]"
+        overrides.append(f"{key}={value}")
+    return overrides
+
+
 def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBasedRlEnv:
     from hydra import compose, initialize_config_dir
     from unilab.base.config_adapter import create_env
@@ -266,7 +301,11 @@ def make_eval_env(run_dir: Path, backend: str = "mjwarp") -> SuperMimicManagerBa
     from unisupermimic.sim2sim import resolve_sim2sim_config
 
     config_dir = Path(unisupermimic.__file__).resolve().parent / "conf" / "supermimic"
-    overrides = ["training.play_only=true", f"task=g1_super_mimic/{backend}"]
+    overrides = [
+        "training.play_only=true",
+        f"task=g1_super_mimic/{backend}",
+        *_structural_overrides(run_dir),
+    ]
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir)):
         cfg = compose(config_name="config", overrides=overrides)
     ensure_registries()
@@ -301,6 +340,9 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--every", type=int, default=1)
     parser.add_argument("--poll_seconds", type=float, default=60.0)
     parser.add_argument("--success_threshold", type=float, default=0.82)
+    parser.add_argument("--push_speed", type=float, default=0.0, help="m/s; 0 = no pushes")
+    parser.add_argument("--push_every", type=int, default=150, help="steps between pushes")
+    parser.add_argument("--push_seed", type=int, default=0)
     return parser
 
 
@@ -321,7 +363,19 @@ def main(argv: list[str] | None = None) -> None:
                 env_action_dim=env.action_manager.total_action_dim,
                 algo_name="supermimic",
             ):
-                result = evaluate(env, checkpoint, device=device)
+                result = evaluate(
+                    env,
+                    checkpoint,
+                    device=device,
+                    push_speed=args.push_speed,
+                    push_every=args.push_every,
+                    push_seed=args.push_seed,
+                )
+            if args.push_speed > 0:
+                _atomic_write_json(
+                    args.ckpt.with_name(f"{args.ckpt.stem}_eval_push{args.push_speed:g}.json"),
+                    result,
+                )
             print(
                 json.dumps(
                     {key: value for key, value in result.items() if key != "per_clip"}, indent=1

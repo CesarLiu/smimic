@@ -23,7 +23,7 @@ from unisupermimic.rl.contracts.supermimic import (
 from unisupermimic.rl.logging import SuperMimicLogger
 
 from . import networks
-from .geometry import unflatten_state
+from .geometry import add_push, sample_push, unflatten_state
 from .networks import Critic, Policy, WorldModel, mlp
 from .replay import ReplayBuffer
 
@@ -61,6 +61,9 @@ class SuperMimicConfig:
     amp: str = "bf16"
     compile: bool = True
     test_hidden_dims: tuple[int, ...] | None = None
+    # imagined root-velocity kicks (analytic push injection; 0 = off, the paper)
+    imag_push_rate: float = 0.0
+    imag_push_scale: float = 1.0
 
 
 _LOG_FIELDS = (
@@ -240,11 +243,17 @@ class SuperMimicLearner:
         return int(features.shape[-1] + self.mdp.goal_frame_dim * self.cfg.goal_frames)
 
     def _wm_rollout(
-        self, states: torch.Tensor, actions: torch.Tensor, contexts: torch.Tensor
+        self,
+        states: torch.Tensor,
+        actions: torch.Tensor,
+        contexts: torch.Tensor,
+        pushes: torch.Tensor,
     ) -> State:
         state = unflatten_state(states[:, 0])
         predictions = []
         for index in range(self.cfg.wm_window):
+            if index > 0:  # logged kick between transitions index-1 and index (zero if none)
+                state = add_push(state, pushes[:, index])
             state = self.wm.step(
                 state,
                 actions[:, index],
@@ -277,14 +286,23 @@ class SuperMimicLearner:
         context: torch.Tensor,
         normalized_context: torch.Tensor,
         goal: torch.Tensor,
-    ) -> tuple[State, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[State, State, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """One imagined step. Returns the pre-kick next state (reward/termination use it, as in
+        the simulator) and the state the rollout continues from (equal without imagined pushes)."""
         action = self.pi(obs_hist, goal)
         next_state = self.wm.step(state, action, normalized_context)
+        continued = next_state
+        if self.cfg.imag_push_rate > 0:
+            batch = action.shape[0]
+            hit = (torch.rand(batch, 1, device=action.device) < self.cfg.imag_push_rate).float()
+            continued = add_push(
+                next_state, hit * sample_push(batch, self.cfg.imag_push_scale, action.device)
+            )
         next_frames = frames + 1
-        obs = self.mdp.add_noise(self.mdp.obs(next_state, action, context, next_frames))
+        obs = self.mdp.add_noise(self.mdp.obs(continued, action, context, next_frames))
         next_hist = torch.cat((obs_hist[:, 1:], obs.unsqueeze(1)), 1)
         next_goal = self.mdp.goal(next_frames, self.cfg.goal_frames)
-        return next_state, action, next_hist, next_frames, next_goal
+        return next_state, continued, action, next_hist, next_frames, next_goal
 
     def _reward_term(
         self,
@@ -350,7 +368,7 @@ class SuperMimicLearner:
 
     def wm_update(self) -> tuple[torch.Tensor, torch.Tensor]:
         window = self.buffer.sample_windows(self.cfg.wm_batch, self.cfg.wm_window)
-        predicted = self._wm_rollout_fn(window["s"], window["a"], window["xi"])
+        predicted = self._wm_rollout_fn(window["s"], window["a"], window["xi"], window["push"])
         loss, last_error = self._wm_err_fn(predicted, window["s1"], window["mask"])
         self.opt_wm.zero_grad(set_to_none=True)
         loss.backward()
@@ -401,11 +419,11 @@ class SuperMimicLearner:
         initial_goal = self.mdp.goal(frames, self.cfg.goal_frames)
         goal = initial_goal
         initial_state = state
-        states, actions, previous_actions, all_frames, goals = [], [], [], [], []
+        states, continued, actions, previous_actions, all_frames, goals = [], [], [], [], [], []
         try:
             for _ in range(self.cfg.horizon):
                 previous_actions.append(previous_action)
-                state, previous_action, obs_hist, frames, goal = self._imag_step_fn(
+                next_state, state, previous_action, obs_hist, frames, goal = self._imag_step_fn(
                     state,
                     obs_hist,
                     previous_action,
@@ -414,7 +432,8 @@ class SuperMimicLearner:
                     normalized_context,
                     goal,
                 )
-                states.append(state)
+                states.append(next_state)  # pre-kick: reward and termination
+                continued.append(state)  # post-kick: critic states and the bootstrap
                 actions.append(previous_action)
                 all_frames.append(frames)
                 goals.append(goal)
@@ -464,7 +483,7 @@ class SuperMimicLearner:
                         torch.cat(
                             (
                                 initial_state[index].unsqueeze(0),
-                                torch.stack([item[index].detach() for item in states]),
+                                torch.stack([item[index].detach() for item in continued]),
                             ),
                             0,
                         ).flatten(0, 1)

@@ -20,6 +20,8 @@ def _make_fields(
         "f": ((), torch.long),
         "ep_step": ((), torch.int32),
         "done": ((), torch.bool),
+        # root-velocity kick between the previous transition's s1 and this s (zero without pushes)
+        "push": (6, torch.float32),
     }
 
 
@@ -48,6 +50,9 @@ class ReplayBuffer:
 
     def add(self, transition: dict[str, torch.Tensor]) -> None:
         for key in self.fields:
+            if key == "push" and key not in transition:  # envs without push injection
+                self.data[key][self.ptr] = 0.0
+                continue
             self.data[key][self.ptr] = transition[key]
         self.ptr = (self.ptr + 1) % self.T
         self.size = min(self.size + 1, self.T)
@@ -65,7 +70,7 @@ class ReplayBuffer:
         ages = start.unsqueeze(-1) + torch.arange(k, device=self.device)
         rows = self._row(ages)
         envs = env.unsqueeze(-1).expand_as(rows)
-        out = {key: self.data[key][rows, envs] for key in ("s", "s1", "a", "xi", "done")}
+        out = {key: self.data[key][rows, envs] for key in ("s", "s1", "a", "xi", "done", "push")}
         done = out["done"].float()
         mask = torch.cumprod(
             torch.cat((torch.ones(B, 1, device=self.device), 1 - done[:, :-1]), -1),

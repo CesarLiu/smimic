@@ -93,6 +93,10 @@ env:
       goal_frames: 10
       context_dim: 33
       resampling_time_range: [1.0e9, 1.0e9]
+      # analytic push injection: kicks every push_interval_s within push_scale x BeyondMimic's
+      # range, applied after each transition is recorded (0 = off, as in the paper)
+      push_scale: 0.0
+      push_interval_s: [1.0, 3.0]
       motion_files:
         - src/unisupermimic/assets/motions/g1/lafan1_supermimic/dance1_subject1.csv
         - src/unisupermimic/assets/motions/g1/lafan1_supermimic/dance1_subject2.csv

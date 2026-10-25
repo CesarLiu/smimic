@@ -181,6 +181,11 @@ class SuperMimicCommandCfg(CommandTermCfg):
     goal_frames: int = 1
     context_dim: int = XI_DIM
     resampling_time_range: tuple[float, float] = (1.0e9, 1.0e9)
+    # Analytic push injection (off by default = the paper, which removes pushes): every
+    # push_interval_s seconds, a world-frame root-velocity kick within push_scale x PUSH_RANGE.
+    # The env applies it after recording the transition, so s1 stays the clean physics target.
+    push_scale: float = 0.0
+    push_interval_s: tuple[float, float] = (1.0, 3.0)
 
     def build(self, env: ManagerBasedRlEnv) -> SuperMimicCommand:
         return SuperMimicCommand(self, env)
@@ -253,6 +258,11 @@ class SuperMimicCommand(CommandTerm):
             raise ValueError("SuperMimicCommandCfg goal_frames must be positive")
         if cfg.context_dim != XI_DIM:
             raise ValueError(f"SuperMimic requires context_dim={XI_DIM}")
+        if not math.isfinite(cfg.push_scale) or cfg.push_scale < 0.0:
+            raise ValueError("SuperMimicCommandCfg push_scale must be finite and non-negative")
+        lo, hi = (float(value) for value in cfg.push_interval_s)
+        if not 0.0 < lo <= hi:
+            raise ValueError("SuperMimicCommandCfg push_interval_s must satisfy 0 < low <= high")
 
     @property
     def tensor_body_names(self) -> tuple[str, ...]:

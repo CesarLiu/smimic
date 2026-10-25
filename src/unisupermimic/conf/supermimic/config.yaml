@@ -40,6 +40,16 @@ algo:
   amp: bf16
   compile: true
   test_hidden_dims: null
+  # imagined root-velocity kicks (analytic push injection); 0 = off, as in the paper
+  imag_push_rate: 0.0
+  imag_push_scale: 1.0
+
+# push test for evaluation (training.play_only=true): a horizontal root-velocity kick of
+# push_speed m/s every push_every steps, directions from push_seed (identical for every policy)
+eval:
+  push_speed: 0.0
+  push_every: 150
+  push_seed: 0
 
 training:
   task_name: G1SuperMimic
