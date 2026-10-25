@@ -44,6 +44,25 @@ algo:
   imag_push_rate: 0.0
   imag_push_scale: 1.0
 
+# PPO-Sim baseline (scripts/train_ppo.py): BeyondMimic's PPO on SuperMimic's task; network
+# sizes and inputs come from algo.* so both methods use identical actor and critic networks.
+ppo:
+  num_envs: 8192          # per GPU, twice SuperMimic's (paper §4.1)
+  steps_per_env: 24
+  epochs: 5
+  minibatches: 4
+  lr: 1.0e-3              # adaptive on the KL
+  desired_kl: 0.01
+  clip: 0.2
+  value_coef: 1.0
+  entropy_coef: 0.005
+  init_std: 1.0
+  max_grad_norm: 1.0
+  iterations: 1000000000
+  max_hours: 18.0         # Fig. 4a budget
+  ckpt_minutes: 30.0
+  log_every: 10
+
 # push test for evaluation (training.play_only=true): a horizontal root-velocity kick of
 # push_speed m/s every push_every steps, directions from push_seed (identical for every policy)
 eval:

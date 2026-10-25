@@ -2,6 +2,7 @@
 
   torchrun --standalone --nproc_per_node=2 -m unisupermimic.scripts.train_ddp \
       training.log_dir=runs/my_run [hydra overrides ...]
+  torchrun ... -m unisupermimic.scripts.train_ddp --ppo training.log_dir=runs/ppo_g4 ...
 
 Each rank sees only its own GPU (CUDA_VISIBLE_DEVICES is narrowed to the LOCAL_RANK-th visible
 device before torch or warp initialize), so the simulator and learner keep using cuda:0 as in a
@@ -27,7 +28,11 @@ def _narrow_visible_devices() -> None:
 
 def main() -> None:
     _narrow_visible_devices()
-    from unisupermimic.scripts.train_supermimic import hydra_main
+    if len(sys.argv) > 1 and sys.argv[1] == "--ppo":  # PPO-Sim baseline instead of SuperMimic
+        sys.argv.pop(1)
+        from unisupermimic.scripts.train_ppo import hydra_main
+    else:
+        from unisupermimic.scripts.train_supermimic import hydra_main
 
     hydra_main()
 

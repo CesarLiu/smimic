@@ -32,14 +32,17 @@ def fmt(values: list[float], digits: int) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", default="runs")
-    parser.add_argument("--iteration", type=int, default=12000)
+    parser.add_argument("--iteration", type=int, default=None, help="default: each run's last")
     args = parser.parse_args()
-    stem = f"ckpt_{args.iteration:06d}"
     table: dict[str, dict[str, list[tuple[float, int]]]] = defaultdict(lambda: defaultdict(list))
     seeds: dict[str, int] = defaultdict(int)
     for run in sorted(Path(args.runs).iterdir()):
-        if not (run / f"{stem}.pt").exists():
+        ckpts = sorted(run.glob("ckpt_*.pt")) if run.is_dir() else []
+        if args.iteration is not None:
+            ckpts = [c for c in ckpts if c.stem == f"ckpt_{args.iteration:06d}"]
+        if not ckpts:
             continue
+        stem = ckpts[-1].stem
         name = re.sub(r"_s\d+$", "", run.name)
         seeds[name] += 1
         for label, suffix in TESTS:

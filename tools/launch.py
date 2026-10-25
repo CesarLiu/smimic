@@ -38,8 +38,8 @@ PUSH_IMAG = ["algo.imag_push_rate=0.01", "algo.imag_push_scale=1.0"]
 E: dict[str, dict] = {}
 
 
-def experiment(name: str, overrides: list[str], note: str, gpus: int = 1) -> None:
-    E[name] = dict(overrides=overrides, note=note, gpus=gpus)
+def experiment(name: str, overrides: list[str], note: str, gpus: int = 1, algo: str = "supermimic") -> None:
+    E[name] = dict(overrides=overrides, note=note, gpus=gpus, algo=algo)
 
 
 for seed in range(3):
@@ -53,11 +53,16 @@ for seed in range(3):
 experiment("uni_base_g2_s0", ["algo.seed=0"], "default config on 2 GPUs (torchrun)", gpus=2)
 experiment("uni_push_g2_s0", ["algo.seed=0"] + PUSH_SIM + PUSH_IMAG, "push injection on 2 GPUs", gpus=2)
 
+# Fig. 4a: PPO-Sim (BeyondMimic PPO in the simulator, 8192 envs/GPU, 18 h) on 1 / 4 / 8 GPUs
+for n in (1, 4, 8):
+    experiment(f"uni_ppo_g{n}", ["algo.seed=0"], f"PPO-Sim on {n} GPU(s), 18 h", gpus=n, algo="ppo")
+
 GROUPS = {
     "push_ab": ["uni_base_s0", "uni_push_s0"],
     "push_ablation": ["uni_push_sim_s0", "uni_push_imag_s0"],
     "push_seeds": ["uni_base_s1", "uni_push_s1", "uni_base_s2", "uni_push_s2"],
     "multi_gpu": ["uni_base_g2_s0", "uni_push_g2_s0"],
+    "ppo": ["uni_ppo_g1", "uni_ppo_g4", "uni_ppo_g8"],
 }
 
 
@@ -74,10 +79,12 @@ def expand(names: list[str]) -> list[str]:
 
 def train_command(name: str) -> list[str]:
     args = [f"training.log_dir=runs/{name}", *E[name]["overrides"]]
-    n = E[name]["gpus"]
+    n, ppo = E[name]["gpus"], E[name]["algo"] == "ppo"
     if n > 1:  # data parallel: one rank per GPU (scripts/train_ddp.py)
         return [TORCHRUN, "--standalone", f"--nproc_per_node={n}", "-m",
-                "unisupermimic.scripts.train_ddp", *args]
+                "unisupermimic.scripts.train_ddp", *(["--ppo"] if ppo else []), *args]
+    if ppo:
+        return [str(BIN / "python"), "-m", "unisupermimic.scripts.train_ppo", *args]
     return [TRAIN, *args]
 
 
@@ -86,7 +93,11 @@ def eval_commands(name: str, curve: bool) -> list[list[str]]:
     if curve:
         ckpts = sorted(run.glob("ckpt_*.pt"))
         return [[EVAL, "--backend", "mjwarp", "--ckpt", str(c)] for c in ckpts]
+    # final checkpoint: ckpt_012000 for SuperMimic; PPO saves by wall clock, so resolve the
+    # highest iteration when the job runs (the shell glob below), not when it is queued
     final = run / f"ckpt_{FINAL_ITERATION:06d}.pt"
+    if E[name]["algo"] == "ppo":
+        final = Path(f"$(ls {run}/ckpt_*.pt | grep -v _eval | sort | tail -1)")
     commands = [[EVAL, "--backend", "mjwarp", "--ckpt", str(final)]]
     commands += [
         [EVAL, "--backend", "mjwarp", "--ckpt", str(final), "--push_speed", f"{v:g}"]
